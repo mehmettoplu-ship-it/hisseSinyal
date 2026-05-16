@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Kullanıcıya özel veriler (JSON state dosyaları)
+alarmlar.json
+favoriler.json
+favoriler.json.bak
+favoriler.json.tmp
+sabitlenmis.json
+sinyal_gecmisi.json
+
+# Görsel / test dosyaları
+1.png
+test.jpg
+formasyonlar.webp
+macd_kesisim.png
+örnekSeneryo.png
+
+# IDE
+.idea/
+.vscode/
+*.code-workspace
+
+# Windows
+Thumbs.db
+desktop.ini

@@ -1,0 +1,2 @@
+- emalar grafik time zamanına göre değil günlükte sabit olacak
+-
