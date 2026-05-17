@@ -262,9 +262,10 @@ class TelegramAyarlari:
     def __init__(self):
         self._cfg = {
             'token': '', 'chat_id': '', 'aktif': False,
-            'guclu_sinyal': True, 'min_guc': 7,
+            'guclu_sinyal': True, 'min_guc': 7, 'tekrar_saat': 4,
         }
         self._yukle()
+        self._gonderilen: dict = {}   # (hisse, sinyal, periyot) → datetime
 
     def _yukle(self):
         try:
@@ -293,6 +294,18 @@ class TelegramAyarlari:
             return r.status_code == 200
         except Exception:
             return False
+
+    def zaten_gonderildi(self, hisse: str, sinyal: str, periyot: str) -> bool:
+        """Aynı (hisse, sinyal, periyot) tekrar_saat içinde gönderildiyse True döner."""
+        from datetime import timedelta
+        anahtar = (hisse, sinyal, periyot)
+        son = self._gonderilen.get(anahtar)
+        if son is None:
+            return False
+        return (datetime.now() - son) < timedelta(hours=self._cfg.get('tekrar_saat', 4))
+
+    def gonderim_kaydet(self, hisse: str, sinyal: str, periyot: str):
+        self._gonderilen[(hisse, sinyal, periyot)] = datetime.now()
 
     def gonder_foto(self, mesaj: str, foto_bytes: bytes) -> bool:
         if not self._cfg.get('aktif') or not self._cfg.get('token') or not self._cfg.get('chat_id'):
@@ -323,6 +336,8 @@ class TelegramAyarlari:
     def min_guc(self):     return int(self._cfg.get('min_guc', 7))
     @property
     def guclu_sinyal(self): return self._cfg.get('guclu_sinyal', True)
+    @property
+    def tekrar_saat(self):  return int(self._cfg.get('tekrar_saat', 4))
 
 
 TELEGRAM = TelegramAyarlari()
@@ -2882,6 +2897,20 @@ class TelegramAyarDialog(QDialog):
         sinyal_lay.addStretch()
         root.addLayout(sinyal_lay)
 
+        tekrar_lay = QHBoxLayout()
+        lbl_tekrar = QLabel("Aynı sinyal tekrar gönderilmesin:")
+        lbl_tekrar.setStyleSheet(f"color:{C_MUTED}; font-size:12px;")
+        self.cmb_tekrar = QComboBox()
+        self.cmb_tekrar.addItems(["1 saat", "2 saat", "4 saat", "8 saat", "24 saat"])
+        _tekrar_map = {1: "1 saat", 2: "2 saat", 4: "4 saat", 8: "8 saat", 24: "24 saat"}
+        self.cmb_tekrar.setCurrentText(_tekrar_map.get(TELEGRAM.tekrar_saat, "4 saat"))
+        self.cmb_tekrar.setFixedWidth(90)
+        self.cmb_tekrar.setFixedHeight(28)
+        tekrar_lay.addWidget(lbl_tekrar)
+        tekrar_lay.addWidget(self.cmb_tekrar)
+        tekrar_lay.addStretch()
+        root.addLayout(tekrar_lay)
+
         lnk = QLabel('<a href="#" style="color:#0a84ff;font-size:11px;">'
                      'ℹ️  Skor nasıl hesaplanır? →</a>')
         lnk.setStyleSheet("background:transparent; border:none;")
@@ -2924,12 +2953,14 @@ class TelegramAyarDialog(QDialog):
         root.addLayout(alt)
 
     def _kaydet(self):
+        _saat_map = {"1 saat": 1, "2 saat": 2, "4 saat": 4, "8 saat": 8, "24 saat": 24}
         TELEGRAM.set(
             token=self.txt_token.text().strip(),
             chat_id=self.txt_chat.text().strip(),
             aktif=self.chk_aktif.isChecked(),
             guclu_sinyal=self.chk_sinyal.isChecked(),
             min_guc=int(self.cmb_skor.currentText()),
+            tekrar_saat=_saat_map.get(self.cmb_tekrar.currentText(), 4),
         )
         durum = "etkin" if self.chk_aktif.isChecked() else "devre dışı"
         QMessageBox.information(self, "Kaydedildi",
@@ -4086,16 +4117,19 @@ class AnaPencere(QMainWindow):
                 sonuc.get('sinyal_gucu', 0) >= TELEGRAM.min_guc and
                 genel not in ('SAT', 'GÜÇLÜ SAT', 'NÖTR')):
             hisse_t   = sonuc.get('hisse', '')
-            fiyat_t   = sonuc.get('fiyat', 0)
-            periyot_t = PERIYOT_ADLARI.get(sonuc.get('periyot', '1d'), '')
-            skor_t    = sonuc.get('sinyal_gucu', 0)
-            mesaj_t   = (f"📊 <b>{hisse_t}</b>  ·  {genel}  ·  Skor {skor_t}/10\n"
-                         f"💸 ₺{fiyat_t:,.2f}  ·  {periyot_t}")
-            foto = _telegram_grafik_png(sonuc)
-            if foto:
-                TELEGRAM.gonder_foto(mesaj_t, foto)
-            else:
-                TELEGRAM.gonder(mesaj_t)
+            periyot_r = sonuc.get('periyot', '1d')
+            if not TELEGRAM.zaten_gonderildi(hisse_t, genel, periyot_r):
+                fiyat_t   = sonuc.get('fiyat', 0)
+                periyot_t = PERIYOT_ADLARI.get(periyot_r, '')
+                skor_t    = sonuc.get('sinyal_gucu', 0)
+                mesaj_t   = (f"📊 <b>{hisse_t}</b>  ·  {genel}  ·  Skor {skor_t}/10\n"
+                             f"💸 ₺{fiyat_t:,.2f}  ·  {periyot_t}")
+                foto = _telegram_grafik_png(sonuc)
+                if foto:
+                    TELEGRAM.gonder_foto(mesaj_t, foto)
+                else:
+                    TELEGRAM.gonder(mesaj_t)
+                TELEGRAM.gonderim_kaydet(hisse_t, genel, periyot_r)
 
         item, widget = _liste_satiri_olustur(sonuc, pin_cb=lambda h: self._pin_toggle(h))
         hisse = sonuc.get('hisse', '')
