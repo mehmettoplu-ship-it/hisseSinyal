@@ -56,10 +56,11 @@ BIST_HISSELER = [
 from gecerli_hisseler import GECERLI_HISSELER as BIST_TUMHISSELER
 
 PERIYOT_ADLARI = {
-    "1h": "1 Saatlik",
-    "4h": "4 Saatlik",
-    "1d": "Günlük",
-    "1w": "Haftalık",
+    "1h":  "1 Saatlik",
+    "4h":  "4 Saatlik",
+    "1d":  "Günlük",
+    "1w":  "Haftalık",
+    "1mo": "Aylık",
 }
 
 # ────────────────────────────────────────────
@@ -105,16 +106,20 @@ def destek_direnc_bul(df, pencere=10):
     if len(df) < pencere * 3:
         return [], []
 
-    high = df['High'].values
-    low  = df['Low'].values
-    n    = len(low)
+    low_s  = df['Low']
+    high_s = df['High']
+    n      = len(low_s)
 
-    destekler, direncler = [], []
-    for i in range(pencere, n - pencere):
-        if low[i]  <= low[i - pencere:i + pencere + 1].min() * 1.001:
-            destekler.append(float(low[i]))
-        if high[i] >= high[i - pencere:i + pencere + 1].max() * 0.999:
-            direncler.append(float(high[i]))
+    # Vectorized: centered rolling min/max replaces O(n²) Python loop
+    win     = 2 * pencere + 1
+    lo_v    = low_s.values
+    hi_v    = high_s.values
+    roll_lo = low_s.rolling(win, center=True).min().values
+    roll_hi = high_s.rolling(win, center=True).max().values
+    sl      = slice(pencere, n - pencere)
+
+    destekler = lo_v[sl][lo_v[sl] <= roll_lo[sl] * 1.001].tolist()
+    direncler = hi_v[sl][hi_v[sl] >= roll_hi[sl] * 0.999].tolist()
 
     def grupla(liste, tolerans=0.015):
         if not liste:
@@ -177,18 +182,22 @@ def hacim_kirilim_bul(df, pencere=20, carpan=1.5):
 # EMA Sıralaması Tespiti
 # ────────────────────────────────────────────
 
-def ema_siralanma_bul(close, max_prime_pct=8.0):
+def ema_siralanma_bul(close, max_prime_pct=8.0, _emas=None):
     """
     EMA5 > EMA8 > EMA13 > EMA21 hizası yeni oluştu.
     Fiyat EMA21'den fazla uzaklaşmamış (primli değil).
+    _emas: {periyot: pd.Series} önden hesaplanmış EMA dizileri (opsiyonel).
     """
     if len(close) < 26:
         return None
 
-    ema5  = close.ewm(span=5,  adjust=False).mean()
-    ema8  = close.ewm(span=8,  adjust=False).mean()
-    ema13 = close.ewm(span=13, adjust=False).mean()
-    ema21 = close.ewm(span=21, adjust=False).mean()
+    if _emas:
+        ema5, ema8, ema13, ema21 = _emas[5], _emas[8], _emas[13], _emas[21]
+    else:
+        ema5  = close.ewm(span=5,  adjust=False).mean()
+        ema8  = close.ewm(span=8,  adjust=False).mean()
+        ema13 = close.ewm(span=13, adjust=False).mean()
+        ema21 = close.ewm(span=21, adjust=False).mean()
 
     e5, e8  = float(ema5.iloc[-1]),  float(ema8.iloc[-1])
     e13, e21 = float(ema13.iloc[-1]), float(ema21.iloc[-1])
@@ -289,6 +298,190 @@ def kutu_konsolidasyon_bul(df, gun_sayisi=30, maks_aralik_pct=0.10, min_dokunma=
 
 
 # ────────────────────────────────────────────
+# RSI Bullish Diverjans Tespiti
+# ────────────────────────────────────────────
+
+def rsi_diverjans_bul(close, rsi_seri=None, lookback=50, pencere=5):
+    """
+    Fiyat daha düşük dip yaparken RSI daha yüksek dip yapıyor.
+    Kurumsal alımın erken habercisi — dönüş sinyali.
+    rsi_seri: önceden hesaplanmış seri (None → içerde hesaplanır).
+    """
+    if len(close) < lookback + pencere:
+        return None
+    if rsi_seri is None:
+        rsi_seri = rsi_hesapla(close)
+
+    c = close.values[-lookback:]
+    r = rsi_seri.values[-lookback:]
+    n = len(c)
+
+    # Vectorized local minima
+    roll_lo = pd.Series(c).rolling(2 * pencere + 1, center=True).min().values
+    is_dip  = c <= roll_lo * 1.001
+    is_dip[:pencere]       = False
+    is_dip[n - pencere:]   = False
+    dipler = np.where(is_dip)[0].tolist()
+
+    if len(dipler) < 2:
+        return None
+
+    d1, d2 = dipler[-2], dipler[-1]
+
+    if c[d2] >= c[d1] * 0.999:    # fiyat daha düşük dip yapmıyor
+        return None
+    if r[d2] <= r[d1] + 1.5:      # RSI en az 1.5 puan daha yüksek olmalı
+        return None
+    if r[d2] > 60:                 # RSI zaten yüksek → diverjans anlamsız
+        return None
+
+    return {
+        'fiyat_dip1': round(float(c[d1]), 2),
+        'fiyat_dip2': round(float(c[d2]), 2),
+        'rsi_dip1':   round(float(r[d1]), 1),
+        'rsi_dip2':   round(float(r[d2]), 1),
+        'guclu':      r[d2] < 45,   # oversold'da daha güçlü
+    }
+
+
+# ────────────────────────────────────────────
+# EMA21 Geri Çekilme (Pullback) Tespiti
+# ────────────────────────────────────────────
+
+def ema_pullback_bul(close, _emas=None, tolerans_pct=3.0):
+    """
+    Yükselen trendde EMA21'e geri çekilip yukarı kırma.
+    - EMA21 yükselen trend (son 10 bar eğimi pozitif)
+    - Son 5 bar içinde fiyat EMA21'e ±tolerans% mesafeye girmiş
+    - Şu an fiyat EMA21 üstünde ve önceki bardan yüksek
+    - EMA21'den uzaklaşma %8'i geçmiyor (primli değil)
+    """
+    if len(close) < 30:
+        return None
+
+    ema21    = _emas[21] if _emas else close.ewm(span=21, adjust=False).mean()
+    e21_son  = float(ema21.iloc[-1])
+    e21_eski = float(ema21.iloc[-10])
+    fiyat    = float(close.iloc[-1])
+
+    if e21_son <= e21_eski * 1.001:      # EMA21 yükselmiyor
+        return None
+    if fiyat <= e21_son:                  # fiyat EMA21 altında
+        return None
+    if fiyat <= float(close.iloc[-2]):    # fiyat yükselmiyor
+        return None
+
+    # Son 5 bar içinde EMA21'e dokunma
+    son5_c   = close.values[-6:-1]
+    son5_e21 = ema21.values[-6:-1]
+    dokunma  = np.any(np.abs(son5_c - son5_e21) / (son5_e21 + 1e-10) <= tolerans_pct / 100)
+    if not dokunma:
+        return None
+
+    prime_pct = (fiyat - e21_son) / e21_son * 100
+    if prime_pct > 8.0:                   # çok uzaklaşmış
+        return None
+
+    return {
+        'ema21':      round(e21_son, 2),
+        'prime_pct':  round(prime_pct, 1),
+        'trend_hizi': round((e21_son - e21_eski) / e21_eski * 100, 2),
+    }
+
+
+# ────────────────────────────────────────────
+# Bollinger Band Sıkışması (Squeeze) Tespiti
+# ────────────────────────────────────────────
+
+def bollinger_squeeze_bul(close, min_lookback=60):
+    """
+    Bollinger bantları son N günün en dar noktasında → büyük hareket kapıda.
+    MACD pozitif yönlüyse AL yönünde filtrele.
+    """
+    if len(close) < min_lookback + 20:
+        return None
+
+    bb_ust, bb_ort, bb_alt = bollinger_hesapla(close)
+    genislik = ((bb_ust - bb_alt) / bb_ort).dropna()
+
+    if len(genislik) < min_lookback:
+        return None
+
+    son_g = float(genislik.iloc[-1])
+    min_g = float(genislik.tail(min_lookback).min())
+    max_g = float(genislik.tail(min_lookback).max())
+
+    if son_g > min_g * 1.08:             # yeterince sıkışmamış
+        return None
+
+    sikisma_pct = 100 - (son_g - min_g) / max(max_g - min_g, 1e-10) * 100
+
+    return {
+        'genislik_pct': round(son_g * 100, 2),
+        'sikisma_pct':  round(sikisma_pct, 1),
+    }
+
+
+# ────────────────────────────────────────────
+# Mum Formasyonu Tespiti (Çekiç / Bullish Engulfing)
+# ────────────────────────────────────────────
+
+def mum_formasyonu_bul(df, destekler=None):
+    """
+    Son barda çekiç (hammer) veya yutan mum (bullish engulfing) arar.
+    Destek bölgesinde oluşursa guclu=True döner.
+    """
+    if len(df) < 3:
+        return None
+
+    son  = df.iloc[-1]
+    prev = df.iloc[-2]
+
+    o = float(son['Open']);  c = float(son['Close'])
+    h = float(son['High']);  l = float(son['Low'])
+    toplam = h - l
+    if toplam <= 0:
+        return None
+
+    govde     = abs(c - o)
+    alt_golge = min(c, o) - l
+    ust_golge = h - max(c, o)
+
+    # Çekiç: alt gölge ≥ 2× gövde, ≥ %45 toplam aralık, kapanış üst %55'te
+    cekic = (
+        govde > 0 and
+        alt_golge >= govde * 2.0 and
+        alt_golge >= toplam * 0.45 and
+        ust_golge <= toplam * 0.35 and
+        c >= l + toplam * 0.55
+    )
+
+    # Yutan mum: önceki düşüş mumunu tamamen yutuyor
+    po = float(prev['Open']); pc = float(prev['Close'])
+    yutan = (
+        pc < po and      # önceki düşüş
+        c  > o  and      # şu an yükseliş
+        o  <= pc and     # açılış önceki kapanış altında
+        c  >= po         # kapanış önceki açılış üstünde
+    )
+
+    if not (cekic or yutan):
+        return None
+
+    formasyon = "ÇEKIÇ" if cekic else "YUTAN MUM"
+
+    destek_yakin = False
+    if destekler:
+        destek_yakin = any(abs(c - d) / (d + 1e-10) < 0.04 for d in destekler[:3])
+
+    return {
+        'formasyon':    formasyon,
+        'destek_yakin': destek_yakin,
+        'guclu':        destek_yakin,
+    }
+
+
+# ────────────────────────────────────────────
 # Veri Çekme
 # ────────────────────────────────────────────
 
@@ -321,6 +514,9 @@ def veri_cek(hisse_kodu, periyot_tipi="1d"):
         elif periyot_tipi == "1w":
             df = yf.download(ticker, period="3y",  interval="1wk",
                              auto_adjust=True, progress=False)
+        elif periyot_tipi == "1mo":
+            df = yf.download(ticker, period="10y", interval="1mo",
+                             auto_adjust=True, progress=False)
         else:  # "1d"
             df = yf.download(ticker, period="1y",  interval="1d",
                              auto_adjust=True, progress=False)
@@ -333,7 +529,7 @@ def veri_cek(hisse_kodu, periyot_tipi="1d"):
         return None
 
 
-_PERIOD_MAP = {"1h": ("7d", "1h"), "4h": ("60d", "1h"), "1w": ("3y", "1wk"), "1d": ("1y", "1d")}
+_PERIOD_MAP = {"1h": ("7d", "1h"), "4h": ("60d", "1h"), "1w": ("3y", "1wk"), "1d": ("1y", "1d"), "1mo": ("10y", "1mo")}
 
 def veri_cek_toplu(hisseler: list, periyot_tipi: str) -> dict:
     """Tüm hisseleri tek yf.download çağrısıyla çeker. {hisse: df} döner."""
@@ -397,37 +593,99 @@ def _indikatör_degerlendır(sinyal):
     return 1 if sinyal == "AL" else (-1 if sinyal == "SAT" else 0)
 
 
-def _hizala_gunluk_ema(df_g, close_gunluk):
+def _hizala_gunluk_ema(df_g, close_gunluk, _emas=None):
     """Günlük close serisinden hesaplanan EMAları df_g barlarına hizalar."""
     import numpy as np, pandas as pd
 
-    def _gun_no(ts):
-        return int(pd.Timestamp(ts).value // (86_400 * 10**9))
+    def _to_days(idx):
+        # .asi8 → nanoseconds since epoch (tz-aware ve tz-naive her ikisinde de güvenli)
+        return pd.DatetimeIndex(idx).asi8 // (86_400 * 10**9)
 
-    g_days = np.array([_gun_no(t) for t in df_g.index])
+    g_days = _to_days(df_g.index)
 
     for p in (5, 8, 13, 21, 50):
-        ema_vals = close_gunluk.ewm(span=p, adjust=False).mean()
-        e_days   = np.array([_gun_no(t) for t in ema_vals.index])
-        e_vals   = ema_vals.values.astype(float)
+        ema_s  = (_emas[p] if _emas and p in _emas else
+                  close_gunluk.ewm(span=p, adjust=False).mean())
+        e_days = _to_days(ema_s.index)
+        e_vals = ema_s.values.astype(float)
 
+        # Vectorized: single searchsorted call on whole array
+        idxs   = np.searchsorted(e_days, g_days, side='right') - 1
+        valid  = idxs >= 0
         result = np.full(len(df_g), np.nan)
-        for i, gd in enumerate(g_days):
-            idx = int(np.searchsorted(e_days, gd, side='right')) - 1
-            if idx >= 0:
-                result[i] = e_vals[idx]
+        result[valid] = e_vals[idxs[valid]]
         df_g[f'EMA{p}'] = result
 
 
-def sinyal_hesapla(df, periyot_tipi="1d", destek_gun_sayisi=3, close_gunluk=None):
+def sinyal_gucu_hesapla(r: dict) -> int:
+    """Sinyal gücünü 1-10 arası puanlar."""
+    puan = 0
+
+    if r.get('macd_kesisim'):
+        puan += 3 if r.get('macd_kesisim_kac_once', 2) == 0 else 2
+    elif r.get('macd_yaklasan'):
+        puan += 1
+
+    hacim = r.get('hacim')
+    if hacim:
+        oran = hacim.get('hacim_orani', 1.0)
+        puan += 1 if oran < 2 else (2 if oran < 3 else 3)
+
+    if r.get('kutu'):
+        puan += 2
+
+    destek_tam = r.get('destek_uzeri') and r.get('destek_yakin') and r.get('destek_test')
+    if destek_tam or r.get('dip_sinyal'):
+        puan += 1
+
+    ema_sir = r.get('ema_sir')
+    if ema_sir:
+        puan += 1
+        if ema_sir.get('yeni'):
+            puan += 1
+
+    rsi = r.get('rsi', 50)
+    if rsi < 35:
+        puan += 1
+    elif rsi > 65:
+        puan -= 1
+
+    if r.get('trend_sinyal') == 'AL':
+        puan += 1
+
+    rsi_div = r.get('rsi_div')
+    if rsi_div:
+        puan += 2 if rsi_div.get('guclu') else 1
+
+    if r.get('ema_pull'):
+        puan += 1
+
+    if r.get('bol_sq'):
+        puan += 1
+
+    mum = r.get('mum')
+    if mum:
+        puan += 2 if mum.get('guclu') else 1
+
+    if r.get('macd_olum'):
+        puan -= 2
+
+    if r.get('destek_kirildi'):
+        puan -= 2
+
+    return max(1, min(10, puan))
+
+
+def sinyal_hesapla(df, periyot_tipi="1d", destek_gun_sayisi=3, close_gunluk=None, grafik=True):
     """
     Tüm indikatörleri hesaplar, destek filtresi uygular ve sinyal üretir.
+    grafik=False → chart serisini atla (BacktestThread için hız optimizasyonu).
     Döndürür: dict (tüm değerler + genel_sinyal) veya None
     """
     if df is None or len(df) < 50:
         return None
 
-    df = df.copy()
+    # df.copy() kaldırıldı — fonksiyon df'yi değiştirmiyor
     close = df['Close'].squeeze()
     high  = df['High'].squeeze()
     low   = df['Low'].squeeze()
@@ -436,8 +694,12 @@ def sinyal_hesapla(df, periyot_tipi="1d", destek_gun_sayisi=3, close_gunluk=None
     r['fiyat']   = round(float(close.iloc[-1]), 2)
     r['periyot'] = periyot_tipi
 
-    # ── RSI ──────────────────────────────────
-    rsi_val = float(rsi_hesapla(close).iloc[-1])
+    # EMA dizileri — bir kez hesapla, hem sinyal hem grafik için yeniden kullan
+    _emas = {p: close.ewm(span=p, adjust=False).mean() for p in (5, 8, 13, 21, 50)}
+
+    # ── RSI — seri önbelleğe alınır; hem sinyal hem grafik kullanır ──
+    rsi_seri = rsi_hesapla(close)
+    rsi_val  = float(rsi_seri.iloc[-1])
     r['rsi'] = round(rsi_val, 1)
     if   rsi_val < 30:         r['rsi_sinyal'] = "AL";   r['rsi_yorum'] = "Aşırı Satım"
     elif rsi_val <= 55:        r['rsi_sinyal'] = "NÖTR"; r['rsi_yorum'] = f"{rsi_val:.0f}"
@@ -450,7 +712,7 @@ def sinyal_hesapla(df, periyot_tipi="1d", destek_gun_sayisi=3, close_gunluk=None
     if r['fiyat'] > sma50_son: r['trend_sinyal'] = "AL";  r['trend_yorum'] = "Yükseliş"
     else:                      r['trend_sinyal'] = "SAT"; r['trend_yorum'] = "Düşüş"
 
-    # ── MACD ──────────────────────────────────
+    # ── MACD — seri önbelleğe alınır; hem sinyal hem grafik kullanır ──
     macd_line, macd_sig, hist = macd_hesapla(close)
     macd_val  = float(macd_line.iloc[-1])
     hist_son  = float(hist.iloc[-1])
@@ -472,6 +734,20 @@ def sinyal_hesapla(df, periyot_tipi="1d", destek_gun_sayisi=3, close_gunluk=None
                 break
     r['macd_kesisim']          = macd_kesisim
     r['macd_kesisim_kac_once'] = kesisim_kac_once
+
+    # MACD ölüm kesişimi: histogram pozitiften negatife geçti (son 2 mum)
+    macd_olum     = False
+    olum_kac_once = None
+    if len(hist_arr) >= 4:
+        for i in range(len(hist_arr) - 1, max(len(hist_arr) - 5, 0), -1):
+            if hist_arr[i] < 0 and hist_arr[i - 1] >= 0:
+                kac = len(hist_arr) - 1 - i
+                if kac <= 1:
+                    macd_olum     = True
+                    olum_kac_once = kac
+                break
+    r['macd_olum']          = macd_olum
+    r['macd_olum_kac_once'] = olum_kac_once
 
     # Yaklaşan kesişim: histogram hâlâ negatif ama bu hızla kaç bar sonra geçer?
     macd_yaklasan    = False
@@ -575,10 +851,29 @@ def sinyal_hesapla(df, periyot_tipi="1d", destek_gun_sayisi=3, close_gunluk=None
     hacim = hacim_kirilim_bul(df)
     r['hacim'] = hacim
 
-    # YOL 5: EMA sıralaması
-    ema_sir = ema_siralanma_bul(close)
+    # YOL 5: EMA sıralaması — önden hesaplanmış _emas'ı geç
+    ema_sir = ema_siralanma_bul(close, _emas=_emas)
     r['ema_sir'] = ema_sir
 
+    # YOL 6: RSI Bullish Diverjans — önden hesaplanan rsi_seri'yi geç
+    rsi_div = rsi_diverjans_bul(close, rsi_seri=rsi_seri)
+    r['rsi_div'] = rsi_div
+
+    # YOL 7: EMA21 Pullback — önden hesaplanan _emas'ı geç
+    ema_pull = ema_pullback_bul(close, _emas=_emas)
+    r['ema_pull'] = ema_pull
+
+    # YOL 8: Bollinger Band Sıkışması
+    bol_sq = bollinger_squeeze_bul(close)
+    r['bol_sq'] = bol_sq
+
+    # YOL 9: Mum Formasyonu — destekler listesini geç
+    mum = mum_formasyonu_bul(df, destekler=destekler)
+    r['mum'] = mum
+
+    # Destek kırılımı: fiyat en yakın desteğin belirgin altına geçmiş
+    destek_kirildi = bool(destekler and r['fiyat'] < destekler[0] * 0.99)
+    r['destek_kirildi'] = destek_kirildi
 
     # ── Gösterge puanı (sadece SAT tespiti için) ──────────
     agirliklar = {'rsi': 1.5, 'trend': 2.0, 'macd': 1.5,
@@ -600,11 +895,16 @@ def sinyal_hesapla(df, periyot_tipi="1d", destek_gun_sayisi=3, close_gunluk=None
     destek_tam = r['destek_uzeri'] and r['destek_yakin'] and r['destek_test']
     destek_ok  = (destek_tam or dip_sinyal) and rsi_ok and not bearish
 
-    kutu_ok     = bool(kutu)    and rsi_ok and not bearish
-    macd_kes_ok = macd_kesisim and rsi_ok and not bearish
-    macd_yak_ok = macd_yaklasan and rsi_ok and not bearish
-    hacim_ok    = bool(hacim)   and rsi_ok and not bearish
-    ema_sir_ok  = bool(ema_sir) and rsi_ok and not bearish
+    kutu_ok      = bool(kutu)     and rsi_ok and not bearish
+    macd_kes_ok  = macd_kesisim  and rsi_ok and not bearish
+    macd_yak_ok  = macd_yaklasan and rsi_ok and not bearish
+    hacim_ok     = bool(hacim)   and rsi_ok and not bearish
+    ema_sir_ok   = bool(ema_sir) and rsi_ok and not bearish
+    rsi_div_ok   = bool(rsi_div) and rsi_ok and not bearish
+    ema_pull_ok  = bool(ema_pull) and rsi_ok and not bearish
+    bol_sq_ok    = bool(bol_sq)  and rsi_ok and not bearish
+    mum_ok       = bool(mum)     and rsi_ok and not bearish
+    macd_olum_ok = macd_olum     and sat_puan > al_puan
 
     # ── Sinyal hiyerarşisi ────────────────────────────────
     if kutu_ok and macd_kes_ok:
@@ -617,14 +917,30 @@ def sinyal_hesapla(df, periyot_tipi="1d", destek_gun_sayisi=3, close_gunluk=None
         r['genel_sinyal'] = "HACİM KIRILIM"
     elif destek_ok and macd_kes_ok:
         r['genel_sinyal'] = "DESTEK+MACD"
+    elif rsi_div_ok and macd_kes_ok:
+        r['genel_sinyal'] = "DIV+MACD"
     elif macd_kes_ok:
         r['genel_sinyal'] = "MACD KESİŞİM"
     elif ema_sir_ok and ema_sir.get('yeni'):
         r['genel_sinyal'] = "EMA SIRALANMA"
+    elif ema_pull_ok and macd_kes_ok:
+        r['genel_sinyal'] = "EMA+MACD"
     elif macd_yak_ok:
         r['genel_sinyal'] = "MACD YAKLAŞIM"
+    elif rsi_div_ok:
+        r['genel_sinyal'] = "RSI DİVERJANS"
+    elif ema_pull_ok:
+        r['genel_sinyal'] = "EMA PULLBACK"
+    elif bol_sq_ok and macd_val > 0:
+        r['genel_sinyal'] = "BOL. SIKIŞMA"
+    elif mum_ok and mum.get('guclu'):
+        r['genel_sinyal'] = "ÇEKİÇ/YUTAN"
     elif destek_ok:
         r['genel_sinyal'] = "DESTEK AL"
+    elif macd_olum_ok:
+        r['genel_sinyal'] = "MACD ÖLÜ"
+    elif destek_kirildi:
+        r['genel_sinyal'] = "DESTEK KIRILDI"
     elif sat_puan >= 5.5 and sat_puan >= al_puan * 2.0:
         r['genel_sinyal'] = "GÜÇLÜ SAT"
     elif sat_puan >= 4.0 and sat_puan > al_puan * 1.2:
@@ -633,24 +949,21 @@ def sinyal_hesapla(df, periyot_tipi="1d", destek_gun_sayisi=3, close_gunluk=None
         r['genel_sinyal'] = "NÖTR"
 
     # ── Grafik verisi (son 80 mum + EMA + MACD + RSI) ──────
-    df_g = df.tail(80).copy()
-    if periyot_tipi == "1d" or close_gunluk is None:
-        for p in (5, 8, 13, 21, 50):
-            df_g[f'EMA{p}'] = close.ewm(span=p, adjust=False).mean().tail(80).values
-    else:
-        _hizala_gunluk_ema(df_g, close_gunluk)
+    # grafik=False → BacktestThread'de atlanır (~9 EWM hesabı tasarruf)
+    if grafik:
+        df_g = df.tail(80).copy()
+        if periyot_tipi == "1d" or close_gunluk is None:
+            for p in (5, 8, 13, 21, 50):
+                df_g[f'EMA{p}'] = _emas[p].tail(80).values   # önbellekten al
+        else:
+            _hizala_gunluk_ema(df_g, close_gunluk)           # _emas burada kullanılmaz
+        df_g['RSI']       = rsi_seri.tail(80).values         # önbellekten al
+        df_g['MACD_LINE'] = macd_line.tail(80).values        # önbellekten al
+        df_g['MACD_SIG']  = macd_sig.tail(80).values
+        df_g['MACD_HIST'] = hist.tail(80).values
+        r['df_grafik'] = df_g
 
-    # RSI serisi (tüm close üzerinden hesapla, son 80'i al)
-    rsi_seri = rsi_hesapla(close)
-    df_g['RSI'] = rsi_seri.tail(80).values
-
-    # MACD serisi
-    macd_l_s, sinyal_l_s, hist_s = macd_hesapla(close)
-    df_g['MACD_LINE'] = macd_l_s.tail(80).values
-    df_g['MACD_SIG']  = sinyal_l_s.tail(80).values
-    df_g['MACD_HIST'] = hist_s.tail(80).values
-
-    r['df_grafik'] = df_g
+    r['sinyal_gucu'] = sinyal_gucu_hesapla(r)
 
     return r
 

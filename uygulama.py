@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
     QSizePolicy, QStatusBar, QScrollArea, QLineEdit,
     QDialog, QTableWidget, QTableWidgetItem, QHeaderView,
     QMessageBox, QInputDialog, QMenu, QSystemTrayIcon,
+    QTabWidget, QCheckBox,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QSize
 from PyQt6.QtGui import QFont, QColor, QClipboard, QIcon, QAction
@@ -253,6 +254,220 @@ SABITLENMIS = SabitleYoneticisi()
 
 
 # ═══════════════════════════════════════════════════════════
+# Telegram Ayarları
+# ═══════════════════════════════════════════════════════════
+class TelegramAyarlari:
+    DOSYA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "telegram_ayar.json")
+
+    def __init__(self):
+        self._cfg = {
+            'token': '', 'chat_id': '', 'aktif': False,
+            'guclu_sinyal': True, 'min_guc': 7,
+        }
+        self._yukle()
+
+    def _yukle(self):
+        try:
+            with open(self.DOSYA, 'r', encoding='utf-8') as f:
+                self._cfg.update(json.load(f))
+        except Exception:
+            pass
+
+    def kaydet(self):
+        try:
+            with open(self.DOSYA, 'w', encoding='utf-8') as f:
+                json.dump(self._cfg, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def gonder(self, mesaj: str) -> bool:
+        if not self._cfg.get('aktif') or not self._cfg.get('token') or not self._cfg.get('chat_id'):
+            return False
+        try:
+            import requests as _req
+            url = f"https://api.telegram.org/bot{self._cfg['token']}/sendMessage"
+            r = _req.post(url, json={
+                'chat_id': self._cfg['chat_id'],
+                'text': mesaj, 'parse_mode': 'HTML',
+            }, timeout=6)
+            return r.status_code == 200
+        except Exception:
+            return False
+
+    def gonder_foto(self, mesaj: str, foto_bytes: bytes) -> bool:
+        if not self._cfg.get('aktif') or not self._cfg.get('token') or not self._cfg.get('chat_id'):
+            return False
+        try:
+            import requests as _req
+            url = f"https://api.telegram.org/bot{self._cfg['token']}/sendPhoto"
+            r = _req.post(url, data={
+                'chat_id': self._cfg['chat_id'],
+                'caption': mesaj,
+                'parse_mode': 'HTML',
+            }, files={'photo': ('chart.png', foto_bytes, 'image/png')}, timeout=15)
+            return r.status_code == 200
+        except Exception:
+            return False
+
+    def set(self, **kw):
+        self._cfg.update(kw)
+        self.kaydet()
+
+    @property
+    def aktif(self):       return self._cfg.get('aktif', False)
+    @property
+    def token(self):       return self._cfg.get('token', '')
+    @property
+    def chat_id(self):     return self._cfg.get('chat_id', '')
+    @property
+    def min_guc(self):     return int(self._cfg.get('min_guc', 7))
+    @property
+    def guclu_sinyal(self): return self._cfg.get('guclu_sinyal', True)
+
+
+TELEGRAM = TelegramAyarlari()
+
+
+# ═══════════════════════════════════════════════════════════
+# Portföy Yöneticisi
+# ═══════════════════════════════════════════════════════════
+class PortfoyYoneticisi:
+    DOSYA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "portfoy.json")
+
+    def __init__(self):
+        self._aktif: dict  = {}
+        self._gecmis: list = []
+        self._yukle()
+
+    def _yukle(self):
+        try:
+            with open(self.DOSYA, 'r', encoding='utf-8') as f:
+                veri = json.load(f)
+            self._aktif  = veri.get('aktif', {})
+            self._gecmis = veri.get('gecmis', [])
+        except Exception:
+            pass
+
+    def _kaydet(self):
+        tmp = self.DOSYA + ".tmp"
+        try:
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump({'aktif': self._aktif, 'gecmis': self._gecmis},
+                          f, ensure_ascii=False, indent=2)
+            os.replace(tmp, self.DOSYA)
+        except Exception:
+            pass
+
+    def pozisyon_ac(self, hisse: str, giris: float, lot: int = 1):
+        self._aktif[hisse] = {
+            'giris': round(giris, 2),
+            'tarih': datetime.now().strftime('%d.%m.%Y %H:%M'),
+            'lot':   lot,
+        }
+        self._kaydet()
+
+    def pozisyon_kapat(self, hisse: str, cikis: float):
+        if hisse not in self._aktif:
+            return
+        p   = self._aktif.pop(hisse)
+        kar = (cikis - p['giris']) / p['giris'] * 100
+        self._gecmis.insert(0, {
+            'hisse':        hisse,
+            'giris':        p['giris'],
+            'cikis':        round(cikis, 2),
+            'lot':          p['lot'],
+            'tarih_giris':  p['tarih'],
+            'tarih_cikis':  datetime.now().strftime('%d.%m.%Y %H:%M'),
+            'kar_yuzde':    round(kar, 2),
+        })
+        self._kaydet()
+
+    def aktif_listesi(self):      return dict(self._aktif)
+    def gecmis_listesi(self):     return list(self._gecmis)
+    def pozisyon_var_mi(self, h): return h in self._aktif
+    def pozisyon(self, h):        return self._aktif.get(h)
+
+
+PORTFOY = PortfoyYoneticisi()
+
+
+# ═══════════════════════════════════════════════════════════
+# Risk Ayarları
+# ═══════════════════════════════════════════════════════════
+class RiskAyarlari:
+    DOSYA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "risk_ayar.json")
+
+    def __init__(self):
+        self._cfg = {'sermaye': 10000.0, 'max_risk_pct': 2.0}
+        self._yukle()
+
+    def _yukle(self):
+        try:
+            with open(self.DOSYA, 'r', encoding='utf-8') as f:
+                self._cfg.update(json.load(f))
+        except Exception:
+            pass
+
+    def kaydet(self):
+        try:
+            with open(self.DOSYA, 'w', encoding='utf-8') as f:
+                json.dump(self._cfg, f, ensure_ascii=False)
+        except Exception:
+            pass
+
+    def set(self, **kw):
+        self._cfg.update(kw)
+        self.kaydet()
+
+    @property
+    def sermaye(self):      return float(self._cfg.get('sermaye', 10000))
+    @property
+    def max_risk_pct(self): return float(self._cfg.get('max_risk_pct', 2.0))
+
+
+RISK_AYAR = RiskAyarlari()
+
+
+# ═══════════════════════════════════════════════════════════
+# Backtest Sonuçları Yöneticisi
+# ═══════════════════════════════════════════════════════════
+class BacktestSonuclariYoneticisi:
+    DOSYA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "backtest_sonuclari.json")
+
+    def __init__(self):
+        self._veri: dict = {}
+        self._yukle()
+
+    def _yukle(self):
+        try:
+            with open(self.DOSYA, 'r', encoding='utf-8') as f:
+                self._veri = json.load(f)
+        except Exception:
+            pass
+
+    def kaydet_sonuc(self, hisse: str, periyot: str, ist: dict):
+        self._veri.setdefault(hisse, {})[periyot] = {
+            'toplam':  ist.get('toplam', 0),
+            'oran':    ist.get('oran', 0),
+            'ort_kar': ist.get('ort_kar', 0),
+            'tarih':   datetime.now().strftime('%d.%m.%Y'),
+        }
+        tmp = self.DOSYA + ".tmp"
+        try:
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(self._veri, f, ensure_ascii=False)
+            os.replace(tmp, self.DOSYA)
+        except Exception:
+            pass
+
+    def al(self, hisse: str, periyot: str) -> dict | None:
+        return self._veri.get(hisse, {}).get(periyot)
+
+
+BACKTEST_SONUCLARI = BacktestSonuclariYoneticisi()
+
+
+# ═══════════════════════════════════════════════════════════
 # Alarm Kontrol Thread
 # ═══════════════════════════════════════════════════════════
 class AlarmThread(QThread):
@@ -295,38 +510,119 @@ class AlarmThread(QThread):
 
 
 SINYAL_RENK = {
-    "KUTU+MACD":     "#fbbf24",   # parlak altın — en güçlü kombinasyon
-    "HACİM+MACD":    "#4ade80",   # parlak yeşil — hacim kırılımı + macd
-    "DESTEK+MACD":   "#2dd4bf",   # parlak teal — destek + macd teyidi
-    "KUTU AL":       "#f59e0b",   # amber — konsolidasyon kutusu
-    "HACİM KIRILIM": "#fcd34d",   # sarı-amber — hacim kırılımı
-    "MACD KESİŞİM":  "#38bdf8",   # sky blue — taze kesişim
-    "EMA SIRALANMA": "#86efac",   # açık yeşil — ema dizilimi
-    "MACD YAKLAŞIM": "#818cf8",   # indigo — yaklaşıyor
-    "DESTEK AL":     "#34d399",   # yeşil — destekte tutunma
-    "GÜÇLÜ SAT":    C_RED,
-    "SAT":          C_RED,
-    "NÖTR":         C_MUTED,
+    "KUTU+MACD":      "#fbbf24",  # parlak altın — en güçlü kombinasyon
+    "HACİM+MACD":     "#4ade80",  # parlak yeşil — hacim kırılımı + macd
+    "DESTEK+MACD":    "#2dd4bf",  # parlak teal — destek + macd teyidi
+    "DIV+MACD":       "#a855f7",  # mor — rsi diverjans + macd
+    "KUTU AL":        "#f59e0b",  # amber — konsolidasyon kutusu
+    "HACİM KIRILIM":  "#fcd34d",  # sarı-amber — hacim kırılımı
+    "MACD KESİŞİM":   "#38bdf8",  # sky blue — taze kesişim
+    "EMA SIRALANMA":  "#86efac",  # açık yeşil — ema dizilimi
+    "EMA+MACD":       "#22d3ee",  # cyan — ema pullback + macd
+    "MACD YAKLAŞIM":  "#818cf8",  # indigo — yaklaşıyor
+    "RSI DİVERJANS":  "#c084fc",  # açık mor — bullish diverjans
+    "EMA PULLBACK":   "#5eead4",  # açık teal — ema21 geri çekilme
+    "BOL. SIKIŞMA":   "#eab308",  # sarı — bant sıkışması
+    "ÇEKİÇ/YUTAN":   "#fb923c",  # turuncu — mum formasyonu
+    "DESTEK AL":      "#34d399",  # yeşil — destekte tutunma
+    "MACD ÖLÜ":      C_RED,
+    "DESTEK KIRILDI": "#ef4444",
+    "GÜÇLÜ SAT":     C_RED,
+    "SAT":           C_RED,
+    "NÖTR":          C_MUTED,
 }
 C_KUTU = "#f59e0b"  # amber — kutu konsolidasyon rengi
 
 # Sinyal badge arka plan renkleri
 _SINYAL_BG = {
-    "KUTU+MACD":     "#5a3c00",
-    "HACİM+MACD":    "#064e3b",
-    "DESTEK+MACD":   "#0c3d38",
-    "KUTU AL":       "#6b4c00",
-    "HACİM KIRILIM": "#713f12",
-    "MACD KESİŞİM":  "#0c3547",
-    "EMA SIRALANMA": "#14532d",
-    "MACD YAKLAŞIM": "#1e1b4b",
-    "DESTEK AL":     "#064e3b",
-    "GÜÇLÜ SAT":    "#5c1111",
-    "SAT":          C_RED_DIM,
+    "KUTU+MACD":      "#5a3c00",
+    "HACİM+MACD":     "#064e3b",
+    "DESTEK+MACD":    "#0c3d38",
+    "DIV+MACD":       "#4a1042",
+    "KUTU AL":        "#6b4c00",
+    "HACİM KIRILIM":  "#713f12",
+    "MACD KESİŞİM":   "#0c3547",
+    "EMA SIRALANMA":  "#14532d",
+    "EMA+MACD":       "#0c3747",
+    "MACD YAKLAŞIM":  "#1e1b4b",
+    "RSI DİVERJANS":  "#3b1762",
+    "EMA PULLBACK":   "#0f3834",
+    "BOL. SIKIŞMA":   "#422006",
+    "ÇEKİÇ/YUTAN":   "#431407",
+    "DESTEK AL":      "#064e3b",
+    "MACD ÖLÜ":      "#5c1111",
+    "DESTEK KIRILDI": "#450a0a",
+    "GÜÇLÜ SAT":     "#5c1111",
+    "SAT":           C_RED_DIM,
 }
 
 def sinyal_bg(genel: str) -> str:
     return _SINYAL_BG.get(genel, C_HEADER)
+
+
+def skor_kirilim(sonuc: dict) -> list:
+    """Aktif skor bileşenlerini [(etiket, puan, renk)] olarak döner."""
+    p = []
+
+    if sonuc.get('macd_kesisim'):
+        pts = 3 if sonuc.get('macd_kesisim_kac_once', 2) == 0 else 2
+        p.append(("MACD Kes.", pts, "#38bdf8"))
+    elif sonuc.get('macd_yaklasan'):
+        p.append(("MACD Yak.", 1, "#818cf8"))
+
+    hacim = sonuc.get('hacim')
+    if hacim:
+        oran = hacim.get('hacim_orani', 1.0)
+        pts  = 1 if oran < 2 else (2 if oran < 3 else 3)
+        p.append((f"Hacim {oran:.1f}×", pts, "#ff9f0a"))
+
+    if sonuc.get('kutu'):
+        p.append(("Kutu", 2, "#f59e0b"))
+
+    destek_tam = (sonuc.get('destek_uzeri') and
+                  sonuc.get('destek_yakin') and sonuc.get('destek_test'))
+    if destek_tam or sonuc.get('dip_sinyal'):
+        p.append(("Destek", 1, "#34d399"))
+
+    ema_sir = sonuc.get('ema_sir')
+    if ema_sir:
+        pts = 2 if ema_sir.get('yeni') else 1
+        etiket = "EMA Sır.✨" if ema_sir.get('yeni') else "EMA Sır."
+        p.append((etiket, pts, "#5b9cf6"))
+
+    rsi = sonuc.get('rsi', 50)
+    if rsi < 35:
+        p.append(("RSI Düşük", 1, C_GREEN))
+    elif rsi > 65:
+        p.append(("RSI Yüksek", -1, C_RED))
+
+    if sonuc.get('trend_sinyal') == 'AL':
+        p.append(("Trend ↑", 1, "#22d3ee"))
+
+    rsi_div = sonuc.get('rsi_div')
+    if rsi_div:
+        pts = 2 if rsi_div.get('guclu') else 1
+        p.append(("RSI Div.", pts, "#c084fc"))
+
+    if sonuc.get('ema_pull'):
+        p.append(("EMA Pull.", 1, "#67e8f9"))
+
+    if sonuc.get('bol_sq'):
+        p.append(("Bol.Sık.", 1, "#eab308"))
+
+    mum = sonuc.get('mum')
+    if mum:
+        pts = 2 if mum.get('guclu') else 1
+        p.append((mum.get('formasyon', 'Mum'), pts, "#fb923c"))
+
+    if sonuc.get('macd_olum'):
+        p.append(("MACD Ölüm", -2, C_RED))
+
+    if sonuc.get('destek_kirildi'):
+        p.append(("D. Kırıldı", -2, C_RED))
+
+    return p
+
 
 def _seg_btn_stili(aktif: bool) -> str:
     bg, fg = ("#ffffff", "#000000") if aktif else ("transparent", C_MUTED)
@@ -501,6 +797,191 @@ class GostergekKart(QFrame):
             border: none;
         """)
         layout.addWidget(lbl_badge)
+
+# ═══════════════════════════════════════════════════════════
+# Telegram için PNG grafik üretici (Qt gerektirmez)
+# ═══════════════════════════════════════════════════════════
+def _telegram_grafik_png(sonuc: dict) -> bytes | None:
+    """df_grafik verisinden PNG bayt dizisi üretir (Qt canvas olmadan)."""
+    from io import BytesIO
+    from matplotlib.figure import Figure
+
+    df_g      = sonuc.get('df_grafik')
+    destekler = sonuc.get('destekler', [])[:3]
+    direncler = sonuc.get('direncler', [])[:3]
+    hisse     = sonuc.get('hisse', '')
+    kutu      = sonuc.get('kutu')
+
+    if df_g is None or df_g.empty:
+        return None
+
+    BG_FRAME = "#0d1f30"; BG_CHART = "#0b1829"
+    C_UP = "#26a69a"; C_DOWN = "#ef5350"
+    C_DESTEK = "#26a69a"; C_DIRENC = "#ef5350"
+    C_KUTU = "#f59e0b"; C_GRID = "#1a2e42"; C_AXIS = "#546e7a"
+    EMA_STILLER = [(5,"#5b9cf6",1.3),(8,"#fb923c",1.3),(13,"#22d3ee",1.2),(21,"#f87171",1.2),(50,"#c084fc",1.5)]
+
+    fig    = Figure(figsize=(10, 6), facecolor=BG_FRAME)
+    ax     = fig.add_axes([0.02, 0.18, 0.78, 0.76])
+    ax_vol = fig.add_axes([0.02, 0.04, 0.78, 0.12])
+
+    for a in (ax, ax_vol):
+        a.set_facecolor(BG_CHART)
+        for side in ('top', 'left', 'bottom'):
+            a.spines[side].set_visible(False)
+        a.spines['right'].set_color(C_GRID)
+        a.yaxis.set_label_position('right'); a.yaxis.tick_right(); a.set_axisbelow(True)
+
+    ax.tick_params(axis='y', colors=C_AXIS, labelsize=8, length=0, pad=4)
+    ax.tick_params(axis='x', bottom=False, labelbottom=False)
+    ax_vol.tick_params(axis='y', colors=C_AXIS, labelsize=6, length=0, pad=3)
+    ax_vol.tick_params(axis='x', colors=C_AXIS, labelsize=7, length=0, pad=3)
+    ax.yaxis.grid(True,     color=C_GRID, linewidth=0.35, linestyle='--', alpha=0.8)
+    ax_vol.yaxis.grid(True, color=C_GRID, linewidth=0.2,  linestyle='--', alpha=0.4)
+
+    n = len(df_g); tum_fiyatlar = []; vol_data = []
+
+    for i, (_, row) in enumerate(df_g.iterrows()):
+        try:
+            o = float(row['Open']); c = float(row['Close'])
+            h = float(row['High']); l = float(row['Low'])
+        except Exception:
+            continue
+        tum_fiyatlar.extend([h, l])
+        yukari = c >= o; renk = C_UP if yukari else C_DOWN
+        bot = min(o, c); yuk = max(abs(c - o), (h - l) * 0.003)
+        ax.add_patch(mpatches.Rectangle((i-0.38, bot), 0.76, yuk,
+            linewidth=0.4, edgecolor=renk, facecolor=renk, alpha=0.88, zorder=3))
+        ax.plot([i,i],[max(o,c),h], color=renk, lw=0.7, zorder=2, solid_capstyle='round')
+        ax.plot([i,i],[l,bot],      color=renk, lw=0.7, zorder=2, solid_capstyle='round')
+        try:    vol_data.append((i, float(row['Volume']), renk))
+        except: vol_data.append((i, 0, renk))
+
+    for period, renk, kalinlik in EMA_STILLER:
+        col = f'EMA{period}'
+        if col not in df_g.columns: continue
+        vals = df_g[col].values.astype(float); mask = ~np.isnan(vals)
+        if mask.sum() < 2: continue
+        xs = np.where(mask)[0]
+        ax.plot(xs, vals[mask], color=renk, lw=kalinlik*2.5, alpha=0.12, zorder=3)
+        ax.plot(xs, vals[mask], color=renk, lw=kalinlik, alpha=0.88, zorder=4, label=f"EMA{period}")
+
+    if vol_data:
+        vols = [v for _,v,_ in vol_data]; max_v = max(vols) or 1
+        for iv,v,rk in vol_data:
+            ax_vol.add_patch(mpatches.Rectangle((iv-0.38,0),0.76,v,
+                linewidth=0, facecolor=rk, alpha=0.45, zorder=2))
+        ax_vol.set_ylim(0, max_v*1.35); ax_vol.set_xlim(-0.8, n-0.2)
+        ax_vol.yaxis.set_major_locator(mticker.MaxNLocator(2, integer=False))
+        ax_vol.yaxis.set_major_formatter(
+            mticker.FuncFormatter(lambda x,_: f"{x/1e6:.1f}M" if x>=1e6 else f"{x/1e3:.0f}K"))
+
+    if not tum_fiyatlar:
+        return None
+
+    pmin, pmax = min(tum_fiyatlar), max(tum_fiyatlar)
+    pad = (pmax-pmin)*0.07 or pmin*0.02
+    lvls = destekler + direncler
+    if kutu: lvls += [kutu['destek'], kutu['direnc']]
+    y_lo = min(pmin-pad, (min(lvls)-pad*0.5) if lvls else pmin-pad)
+    y_hi = max(pmax+pad*3.0, (max(lvls)+pad) if lvls else pmax+pad)
+    ax.set_xlim(-0.8, n-0.2); ax.set_ylim(y_lo, y_hi)
+
+    def _frac(price): return (price - y_lo) / (y_hi - y_lo)
+
+    try:
+        son_k = float(df_g['Close'].iloc[-1]); son_o = float(df_g['Open'].iloc[-1])
+    except Exception:
+        son_k = son_o = 0.0
+
+    _lbls = []; _MIN_GAP = 0.058
+
+    def _etiket_ekle(frac, metin, renk, badge_fc=None, kalin=True):
+        for _ in range(15):
+            conflict = next((f for f,*_ in _lbls if abs(frac-f) < _MIN_GAP), None)
+            if conflict is None: break
+            frac = conflict - _MIN_GAP if frac < conflict else conflict + _MIN_GAP
+        _lbls.append((max(0.02, min(0.97, frac)), metin, renk, badge_fc, kalin))
+
+    for idx, d in enumerate(destekler):
+        guc = 1.0-idx*0.20; lw = 1.6-idx*0.3
+        mesafe = (son_k-d)/son_k*100 if son_k > 0 else 0
+        ax.axhline(d, color=C_DESTEK, lw=lw*5, alpha=0.05, zorder=3)
+        ax.axhline(d, color=C_DESTEK, lw=lw, linestyle='--', alpha=guc*0.9, zorder=5)
+        ax.axhspan(d*0.995, d*1.005, alpha=max(0.02,0.07-idx*0.02), color=C_DESTEK, zorder=1)
+        ax.plot(n-1, d, 'o', color=C_DESTEK, ms=4.5-idx*0.5, alpha=guc*0.9, zorder=7)
+        _etiket_ekle(_frac(d), f" D{idx+1}  {d:.2f}  ↓{mesafe:.1f}% ", C_DESTEK, BG_CHART)
+
+    for idx, rv in enumerate(direncler):
+        guc = 1.0-idx*0.20; lw = 1.6-idx*0.3
+        mesafe = (rv-son_k)/son_k*100 if son_k > 0 else 0
+        ax.axhline(rv, color=C_DIRENC, lw=lw*5, alpha=0.05, zorder=3)
+        ax.axhline(rv, color=C_DIRENC, lw=lw, linestyle='--', alpha=guc*0.9, zorder=5)
+        ax.axhspan(rv*0.995, rv*1.005, alpha=max(0.02,0.07-idx*0.02), color=C_DIRENC, zorder=1)
+        ax.plot(n-1, rv, 'o', color=C_DIRENC, ms=4.5-idx*0.5, alpha=guc*0.9, zorder=7)
+        _etiket_ekle(_frac(rv), f" R{idx+1}  {rv:.2f}  ↑{mesafe:.1f}% ", C_DIRENC, BG_CHART)
+
+    if kutu:
+        k_d=kutu['destek']; k_r=kutu['direnc']
+        k_pct=kutu['aralik_pct']; k_doc=kutu.get('dokunma',0); k_bar=kutu.get('gun_sayisi',30)
+        x0=max(0,n-k_bar-1); xs=list(range(x0,n))
+        ax.fill_between(xs, k_d, k_r, alpha=0.11, color=C_KUTU, zorder=1)
+        ax.plot([x0,x0],[k_d,k_r], color=C_KUTU, lw=0.7, alpha=0.35, zorder=4)
+        ax.plot([x0,n-0.2],[k_d,k_d], color=C_KUTU, lw=2.0, alpha=0.90, zorder=6)
+        ax.axhline(k_d, color=C_KUTU, lw=6, alpha=0.05, zorder=3)
+        ax.plot([x0,n-0.2],[k_r,k_r], color=C_KUTU, lw=1.4, linestyle='--', alpha=0.85, zorder=6)
+        ax.axhline(k_r, color=C_KUTU, lw=6, alpha=0.05, zorder=3)
+        _etiket_ekle(_frac(k_r), f" KUTU ▸ {k_r:.2f}  %{k_pct} ", C_KUTU, "#2d1e00")
+        _etiket_ekle(_frac(k_d), f" KUTU ▸ {k_d:.2f}  {k_doc}x ", C_KUTU, "#2d1e00")
+
+    if son_k > 0:
+        f_renk = C_UP if son_k >= son_o else C_DOWN
+        ax.axhline(son_k, color=f_renk, lw=0.6, linestyle='--', alpha=0.45, zorder=4)
+        _etiket_ekle(_frac(son_k), f" {son_k:.2f} ", 'white', f_renk)
+
+    for frac, metin, renk, badge_fc, kalin in _lbls:
+        fc = badge_fc if badge_fc else BG_CHART
+        ax.annotate(metin, xy=(1.0, frac), xycoords='axes fraction',
+            color=renk, fontsize=7.5, fontweight='bold' if kalin else 'normal',
+            va='center', ha='left', annotation_clip=False,
+            bbox=dict(boxstyle='round,pad=0.28', facecolor=fc, edgecolor=renk,
+                      alpha=0.92, linewidth=0.0 if badge_fc==renk else 0.7))
+
+    adim = max(1, n//8); ticks = list(range(0, n, adim))
+    labels = [df_g.index[i].strftime('%d/%m') for i in ticks if i < n]
+    ax_vol.set_xticks(ticks[:len(labels)]); ax_vol.set_xticklabels(labels, fontsize=7, color=C_AXIS)
+    ax.set_xticks([])
+
+    try:
+        leg = ax.legend(loc='upper left', fontsize=7, framealpha=0.25,
+                        facecolor=BG_CHART, edgecolor=C_GRID,
+                        handlelength=1.5, handletextpad=0.5, borderpad=0.4, labelspacing=0.25)
+        for txt, (_, renk, _) in zip(leg.get_texts(), EMA_STILLER):
+            txt.set_color(renk)
+    except Exception:
+        pass
+
+    genel      = sonuc.get('genel_sinyal', '')
+    skor       = sonuc.get('sinyal_gucu', 0)
+    periyot_ad = PERIYOT_ADLARI.get(sonuc.get('periyot', '1d'), '')
+    fig.text(0.02, 0.975, hisse, color='#e2e8f0', fontsize=13, fontweight='bold', va='top', ha='left')
+    try:
+        ilk = float(df_g['Close'].iloc[0]); son = float(df_g['Close'].iloc[-1])
+        deg = (son-ilk)/ilk*100; d_renk = C_UP if deg >= 0 else C_DOWN
+        fig.text(0.02+len(hisse)*0.012, 0.975,
+                 f"   {'+' if deg>=0 else ''}{deg:.2f}%",
+                 color=d_renk, fontsize=10, fontweight='bold', va='top', ha='left')
+    except Exception:
+        pass
+    sinyal_renk = SINYAL_RENK.get(genel, '#8e8e93')
+    fig.text(0.02, 0.957, f"{genel}  ·  Skor {skor}/10  ·  {periyot_ad}",
+             color=sinyal_renk, fontsize=9, fontweight='bold', va='top', ha='left')
+
+    buf = BytesIO()
+    fig.savefig(buf, format='png', dpi=120, bbox_inches='tight', facecolor=BG_FRAME)
+    fig.clf()
+    return buf.getvalue()
+
 
 # ═══════════════════════════════════════════════════════════
 # Mum Grafiği Widget (Matplotlib embedded)
@@ -857,6 +1338,33 @@ class DetayPanel(QWidget):
             f"QPushButton:hover{{background:#1a3a5c;color:#5b9cf6;}}")
         self.btn_alarm.clicked.connect(self._alarm_toggle)
 
+        self.btn_portfoy = QPushButton("📈")
+        self.btn_portfoy.setFixedSize(38, 38)
+        self.btn_portfoy.setToolTip("Pozisyon aç")
+        self.btn_portfoy.setStyleSheet(
+            f"QPushButton{{background:{C_CARD2};border:none;"
+            f"border-radius:10px;font-size:15px;padding:0;color:{C_MUTED};}}"
+            f"QPushButton:hover{{background:#0a3d1f;color:{C_GREEN};}}")
+        self.btn_portfoy.clicked.connect(self._portfoy_toggle)
+
+        self.btn_neden = QPushButton("🔍")
+        self.btn_neden.setFixedSize(38, 38)
+        self.btn_neden.setToolTip("Neden bu sinyal?")
+        self.btn_neden.setStyleSheet(
+            f"QPushButton{{background:{C_CARD2};border:none;"
+            f"border-radius:10px;font-size:15px;padding:0;color:{C_MUTED};}}"
+            f"QPushButton:hover{{background:#1a1a2e;color:#a78bfa;}}")
+        self.btn_neden.clicked.connect(self._neden_ac)
+
+        self.btn_kap = QPushButton("🏛")
+        self.btn_kap.setFixedSize(38, 38)
+        self.btn_kap.setToolTip("KAP Duyuruları")
+        self.btn_kap.setStyleSheet(
+            f"QPushButton{{background:{C_CARD2};border:none;"
+            f"border-radius:10px;font-size:15px;padding:0;color:{C_MUTED};}}"
+            f"QPushButton:hover{{background:#0a3d1f;color:{C_GREEN};}}")
+        self.btn_kap.clicked.connect(self._kap_ac)
+
         self.btn_kopyala = QPushButton("📋")
         self.btn_kopyala.setFixedSize(38, 38)
         self.btn_kopyala.setToolTip("Bildirim metnini kopyala")
@@ -878,6 +1386,12 @@ class DetayPanel(QWidget):
         baslik_layout.addWidget(self.btn_favori)
         baslik_layout.addSpacing(4)
         baslik_layout.addWidget(self.btn_alarm)
+        baslik_layout.addSpacing(4)
+        baslik_layout.addWidget(self.btn_portfoy)
+        baslik_layout.addSpacing(4)
+        baslik_layout.addWidget(self.btn_neden)
+        baslik_layout.addSpacing(4)
+        baslik_layout.addWidget(self.btn_kap)
         baslik_layout.addSpacing(4)
         baslik_layout.addWidget(self.btn_kopyala)
         root.addLayout(baslik_layout)
@@ -911,7 +1425,7 @@ class DetayPanel(QWidget):
         seg_lay = QHBoxLayout(seg)
         seg_lay.setContentsMargins(3, 3, 3, 3)
         seg_lay.setSpacing(2)
-        for etiket, kod in [("1S","1h"), ("4S","4h"), ("Gün","1d"), ("Haf","1w")]:
+        for etiket, kod in [("1S","1h"), ("4S","4h"), ("Gün","1d"), ("Haf","1w"), ("Ay","1mo")]:
             btn = QPushButton(etiket)
             btn.setCheckable(True)
             btn.setChecked(kod == "1d")
@@ -961,11 +1475,91 @@ class DetayPanel(QWidget):
         ozet_lay.addStretch()
         root.addWidget(ozet_frame)
 
+        # ── Skor Kırılımı ────────────────────
+        skor_frame = QFrame()
+        skor_frame.setStyleSheet(f"background:{C_CARD}; border-radius:10px; border:none;")
+        skor_frame.setMinimumHeight(36)
+        skor_hor = QHBoxLayout(skor_frame)
+        skor_hor.setContentsMargins(10, 5, 10, 5)
+        skor_hor.setSpacing(8)
+
+        self.lbl_skor_sayi = QLabel("—")
+        self.lbl_skor_sayi.setFixedWidth(28)
+        self.lbl_skor_sayi.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_skor_sayi.setStyleSheet(
+            f"font-size:16px; font-weight:800; background:transparent; color:{C_TEXT};")
+        skor_hor.addWidget(self.lbl_skor_sayi)
+
+        sep_s = QFrame()
+        sep_s.setFixedWidth(1)
+        sep_s.setMinimumHeight(20)
+        sep_s.setStyleSheet(f"background:{C_BORDER}; border:none;")
+        skor_hor.addWidget(sep_s)
+
+        self._skor_pills_lay = QHBoxLayout()
+        self._skor_pills_lay.setSpacing(4)
+        self._skor_pills_lay.setContentsMargins(0, 0, 0, 0)
+        skor_hor.addLayout(self._skor_pills_lay)
+        skor_hor.addStretch()
+
+        btn_skor_detay = QPushButton("?")
+        btn_skor_detay.setFixedSize(22, 22)
+        btn_skor_detay.setToolTip("Skor nasıl hesaplanır? — Strateji Rehberini aç")
+        btn_skor_detay.setStyleSheet(
+            f"QPushButton{{background:{C_CARD2};color:{C_MUTED};border:none;"
+            f"border-radius:11px;font-size:11px;font-weight:700;padding:0;}}"
+            f"QPushButton:hover{{background:{C_BORDER};color:{C_TEXT};}}")
+        btn_skor_detay.clicked.connect(self._skor_rehber_ac)
+        skor_hor.addWidget(btn_skor_detay)
+        root.addWidget(skor_frame)
+
+        # ── Risk/Ödül Şeridi ─────────────────
+        rr_frame = QFrame()
+        rr_frame.setFixedHeight(38)
+        rr_frame.setStyleSheet(f"background:{C_CARD}; border-radius:10px; border:none;")
+        rr_lay = QHBoxLayout(rr_frame)
+        rr_lay.setContentsMargins(12, 0, 12, 0)
+        rr_lay.setSpacing(4)
+
+        def _rr_pill(txt):
+            l = QLabel(txt)
+            l.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            l.setStyleSheet(
+                f"color:{C_MUTED}; font-size:11px; font-weight:600; "
+                f"background:{C_CARD2}; border-radius:6px; padding:2px 9px; border:none;")
+            return l
+
+        self._rr_stop  = _rr_pill("Stop —")
+        self._rr_hedef = _rr_pill("Hedef —")
+        self._rr_oran  = _rr_pill("R:R —")
+        self._rr_risk  = _rr_pill("Risk —")
+        self._rr_lot   = _rr_pill("Lot —")
+        self._rr_bt    = _rr_pill("")
+        self._rr_bt.setVisible(False)
+
+        btn_risk_ayar = QPushButton("⚙")
+        btn_risk_ayar.setFixedSize(26, 26)
+        btn_risk_ayar.setToolTip("Risk Ayarları")
+        btn_risk_ayar.setStyleSheet(
+            f"QPushButton{{background:{C_CARD2};border:none;border-radius:6px;"
+            f"font-size:12px;padding:0;color:{C_MUTED};}}"
+            f"QPushButton:hover{{background:#48484a;color:{C_TEXT};}}")
+        btn_risk_ayar.clicked.connect(self._risk_ayar_ac)
+
+        for w in (self._rr_stop, self._rr_hedef, self._rr_oran, self._rr_risk, self._rr_lot):
+            rr_lay.addWidget(w)
+        rr_lay.addSpacing(6)
+        rr_lay.addWidget(self._rr_bt)
+        rr_lay.addStretch()
+        rr_lay.addWidget(btn_risk_ayar)
+        root.addWidget(rr_frame)
+
         # ── Mum Grafiği (tam alan) ────────────
         self.grafik = GrafikWidget(self)
         root.addWidget(self.grafik, stretch=1)
 
         self._sonuc = None
+        self._kap_thread = None
 
     @staticmethod
     def _ema_btn_stili(aktif: bool) -> str:
@@ -1060,6 +1654,126 @@ class DetayPanel(QWidget):
                 f"QPushButton:hover{{background:#1a3a5c;color:#5b9cf6;}}")
             self.btn_alarm.setToolTip("Fiyat alarmı kur")
 
+    def _portfoy_toggle(self):
+        if not self._sonuc:
+            return
+        hisse = self._sonuc.get('hisse', '')
+        fiyat = self._sonuc.get('fiyat', 0)
+        if PORTFOY.pozisyon_var_mi(hisse):
+            p    = PORTFOY.pozisyon(hisse)
+            cevap = QMessageBox.question(
+                self, f"{hisse} — Pozisyon Kapat",
+                f"Güncel fiyat (₺{fiyat:.2f}) ile kapat?",
+                QMessageBox.StandardButton.Yes |
+                QMessageBox.StandardButton.No  |
+                QMessageBox.StandardButton.Cancel,
+            )
+            if cevap == QMessageBox.StandardButton.Yes:
+                PORTFOY.pozisyon_kapat(hisse, fiyat)
+                self._portfoy_guncelle(hisse)
+            elif cevap == QMessageBox.StandardButton.No:
+                cikis, ok = QInputDialog.getDouble(
+                    self, "Çıkış Fiyatı", f"{hisse} çıkış fiyatı (₺):",
+                    value=round(fiyat, 2), min=0.01, max=999999.99, decimals=2)
+                if ok:
+                    PORTFOY.pozisyon_kapat(hisse, cikis)
+                    self._portfoy_guncelle(hisse)
+        else:
+            lot, ok = QInputDialog.getInt(
+                self, f"{hisse} — Pozisyon Aç",
+                f"Giriş fiyatı: ₺{fiyat:.2f}\nLot / Adet sayısı:",
+                value=1, min=1, max=1_000_000)
+            if ok:
+                PORTFOY.pozisyon_ac(hisse, fiyat, lot)
+                self._portfoy_guncelle(hisse)
+
+    def _portfoy_guncelle(self, hisse: str):
+        if PORTFOY.pozisyon_var_mi(hisse):
+            p = PORTFOY.pozisyon(hisse)
+            self.btn_portfoy.setStyleSheet(
+                f"QPushButton{{background:#0a3d1f;border:1px solid {C_GREEN};"
+                f"border-radius:10px;font-size:15px;padding:0;color:{C_GREEN};}}"
+                f"QPushButton:hover{{background:#0d4f28;}}")
+            self.btn_portfoy.setToolTip(
+                f"Pozisyon açık — ₺{p['giris']:.2f} · {p['lot']} lot")
+        else:
+            self.btn_portfoy.setStyleSheet(
+                f"QPushButton{{background:{C_CARD2};border:none;"
+                f"border-radius:10px;font-size:15px;padding:0;color:{C_MUTED};}}"
+                f"QPushButton:hover{{background:#0a3d1f;color:{C_GREEN};}}")
+            self.btn_portfoy.setToolTip("Pozisyon aç")
+
+    def _rr_guncelle(self, sonuc: dict):
+        fiyat = sonuc.get('fiyat', 0)
+        if fiyat <= 0:
+            return
+        kutu      = sonuc.get('kutu')
+        destekler = sonuc.get('destekler', [])
+        direncler = sonuc.get('direncler', [])
+
+        stop  = kutu['destek']  if kutu      else (destekler[0] if destekler else fiyat * 0.95)
+        hedef = kutu['direnc']  if kutu      else (direncler[0] if direncler else fiyat * 1.10)
+        stop_mesafe  = max(fiyat - stop, fiyat * 0.005)
+        hedef_mesafe = hedef - fiyat
+        rr           = hedef_mesafe / stop_mesafe if stop_mesafe > 0 else 0
+        max_risk_tl  = RISK_AYAR.sermaye * RISK_AYAR.max_risk_pct / 100
+        lot          = int(max_risk_tl / stop_mesafe) if stop_mesafe > 0 else 0
+        rr_renk      = C_GREEN if rr >= 2 else C_ORANGE if rr >= 1.5 else C_RED
+
+        def _sp(lbl, txt, renk=C_MUTED):
+            lbl.setText(txt)
+            lbl.setStyleSheet(
+                f"color:{renk}; font-size:11px; font-weight:600; "
+                f"background:{C_CARD2}; border-radius:6px; padding:2px 9px; border:none;")
+
+        _sp(self._rr_stop,  f"Stop ₺{stop:.2f}",    C_RED)
+        _sp(self._rr_hedef, f"Hedef ₺{hedef:.2f}",  C_GREEN)
+        _sp(self._rr_oran,  f"R:R  1:{rr:.1f}",     rr_renk)
+        _sp(self._rr_risk,  f"Risk ₺{max_risk_tl:.0f}", C_ORANGE)
+        _sp(self._rr_lot,   f"Lot {lot:,}",          C_TEXT)
+
+        hisse   = sonuc.get('hisse', '')
+        periyot = sonuc.get('periyot', '1d')
+        bt = BACKTEST_SONUCLARI.al(hisse, periyot)
+        if bt:
+            oran   = bt.get('oran', 0)
+            toplam = bt.get('toplam', 0)
+            bt_renk = C_GREEN if oran >= 60 else C_ORANGE if oran >= 40 else C_RED
+            _sp(self._rr_bt, f"BT %{oran:.0f}  ·  {toplam} sin.", bt_renk)
+            self._rr_bt.setVisible(True)
+        else:
+            self._rr_bt.setVisible(False)
+
+    def _neden_ac(self):
+        if self._sonuc:
+            NedenDialog(self._sonuc, self).exec()
+
+    def _kap_ac(self):
+        if not self._sonuc:
+            return
+        hisse = self._sonuc.get('hisse', '')
+        if self._kap_thread and self._kap_thread.isRunning():
+            return
+        self.btn_kap.setText("⏳")
+        self.btn_kap.setEnabled(False)
+        self._kap_thread = KapFetchThread(hisse)
+        self._kap_thread.bitti.connect(lambda d, h=hisse: self._kap_gosterdi(h, d))
+        self._kap_thread.hata.connect(lambda _: self._kap_gosterdi(hisse, []))
+        self._kap_thread.start()
+
+    def _kap_gosterdi(self, hisse: str, duyurular: list):
+        self.btn_kap.setText("🏛")
+        self.btn_kap.setEnabled(True)
+        KapDuyuruDialog(hisse, duyurular, self).exec()
+
+    def _risk_ayar_ac(self):
+        RiskAyarDialog(self).exec()
+        if self._sonuc:
+            self._rr_guncelle(self._sonuc)
+
+    def _skor_rehber_ac(self):
+        StratejilerDialog(self).exec()
+
     def _kopyala(self):
         if self._sonuc:
             metin = bildirim_metni(self._sonuc)
@@ -1119,6 +1833,7 @@ class DetayPanel(QWidget):
             f"{periyot_ad}  ·  {datetime.now().strftime('%d.%m.%Y %H:%M')}")
         self._star_guncelle(hisse, fiyat)
         self._alarm_guncelle(hisse)
+        self._portfoy_guncelle(hisse)
 
         renk = SINYAL_RENK.get(genel, C_MUTED)
         bg   = sinyal_bg(genel)
@@ -1184,6 +1899,27 @@ class DetayPanel(QWidget):
         self._ozet_vol.setText(vol_txt)
         self._ozet_vol.setStyleSheet(_pill(vol_c, vol_bg, ''))
 
+        # Skor kırılımı
+        skor_val = sonuc.get('sinyal_gucu', 0)
+        skor_renk = C_GREEN if skor_val >= 8 else C_ORANGE if skor_val >= 5 else C_MUTED
+        self.lbl_skor_sayi.setText(str(skor_val))
+        self.lbl_skor_sayi.setStyleSheet(
+            f"font-size:16px; font-weight:800; background:transparent; color:{skor_renk};")
+        while self._skor_pills_lay.count():
+            it = self._skor_pills_lay.takeAt(0)
+            if it.widget():
+                it.widget().deleteLater()
+        for etiket, puan, renk in skor_kirilim(sonuc):
+            isaret = f"+{puan}" if puan > 0 else str(puan)
+            pill = QLabel(f"{etiket} {isaret}")
+            pill.setStyleSheet(
+                f"color:{renk}; font-size:10px; font-weight:600; "
+                f"background:{C_CARD2}; border-radius:5px; padding:1px 6px; border:none;")
+            self._skor_pills_lay.addWidget(pill)
+
+        # Risk/Ödül şeridini güncelle
+        self._rr_guncelle(sonuc)
+
         # Grafik
         df_g = sonuc.get('df_grafik')
         self.grafik.guncelle(
@@ -1247,7 +1983,8 @@ class TaramaThread(QThread):
                     if sonuc and sonuc.get('genel_sinyal') != 'NÖTR':
                         sonuc['hisse'] = hisse
                         genel_s = sonuc['genel_sinyal']
-                        if genel_s in SINYAL_RENK and genel_s not in ("GÜÇLÜ SAT", "SAT", "NÖTR"):
+                        if genel_s in SINYAL_RENK and genel_s not in (
+                                "GÜÇLÜ SAT", "SAT", "NÖTR", "MACD ÖLÜ", "DESTEK KIRILDI"):
                             al_n += 1
                             GECMIS.kaydet(hisse, genel_s, sonuc['fiyat'], periyot)
                         else:
@@ -1268,7 +2005,7 @@ class TekHisseFetchThread(QThread):
         self.periyot = periyot
 
     def run(self):
-        gun_sayilari = {"1h": 3, "4h": 18, "1d": 3, "1w": 3}
+        gun_sayilari = {"1h": 3, "4h": 18, "1d": 3, "1w": 3, "1mo": 1}
         df = veri_cek(self.hisse, self.periyot)
         if df is None:
             self.hata.emit(self.hisse)
@@ -1286,6 +2023,174 @@ class TekHisseFetchThread(QThread):
             self.bitti.emit(sonuc)
         else:
             self.hata.emit(self.hisse)
+
+# ═══════════════════════════════════════════════════════════
+# Backtest Thread
+# ═══════════════════════════════════════════════════════════
+class BacktestThread(QThread):
+    ilerleme = pyqtSignal(int, int)
+    bitti    = pyqtSignal(list, dict)
+
+    # periyot → (yf period, yf interval, resample?, bekleme bar, tarih fmt)
+    _CFG = {
+        '1h': ('730d', '1h', False, 20,  '%d.%m.%Y %H:%M'),
+        '4h': ('730d', '1h', True,  10,  '%d.%m.%Y %H:%M'),
+        '1d': ('2y',   '1d', False, 10,  '%d.%m.%Y'),
+    }
+
+    def __init__(self, hisse: str, periyot: str = '1d'):
+        super().__init__()
+        self.hisse   = hisse
+        self.periyot = periyot
+        self._dur    = False
+
+    def dur(self):
+        self._dur = True
+
+    def run(self):
+        import yfinance as yf
+        from tarayici import _sutunlari_duzenle, sinyal_hesapla as _sh
+
+        yf_per, yf_int, resample, bekleme, tarih_fmt = self._CFG.get(
+            self.periyot, ('2y', '1d', False, 10, '%d.%m.%Y'))
+
+        df_ham = yf.download(f"{self.hisse}.IS", period=yf_per, interval=yf_int,
+                             auto_adjust=True, progress=False)
+        if df_ham is None or df_ham.empty:
+            self.bitti.emit([], {})
+            return
+
+        df_ham = _sutunlari_duzenle(df_ham).dropna()
+
+        if resample:
+            df_ham = df_ham.resample('4h').agg({
+                'Open': 'first', 'High': 'max',
+                'Low': 'min', 'Close': 'last', 'Volume': 'sum',
+            }).dropna()
+
+        n = len(df_ham)
+        if n < 60:
+            self.bitti.emit([], {})
+            return
+
+        HEDEF_PCT = 5.0
+        kayitlar  = []
+
+        for i in range(50, n - bekleme):
+            if self._dur:
+                break
+            self.ilerleme.emit(i - 50, n - 50 - bekleme)
+            try:
+                pencere = df_ham.iloc[:i + 1]          # copy() gereksiz — _sh df'yi değiştirmiyor
+                sonuc   = _sh(pencere, self.periyot, 3, grafik=False)
+                if sonuc is None:
+                    continue
+                genel = sonuc.get('genel_sinyal', 'NÖTR')
+                if genel in ('NÖTR', 'SAT', 'GÜÇLÜ SAT'):
+                    continue
+
+                giris   = float(df_ham['Close'].iloc[i])
+                h_yuk   = df_ham['High'].iloc[i + 1: i + 1 + bekleme]
+                h_dus   = df_ham['Low'].iloc[i + 1: i + 1 + bekleme]
+                max_yuk = float(h_yuk.max())
+                min_dus = float(h_dus.min())
+                kar_pct = (max_yuk - giris) / giris * 100
+                dd_pct  = (min_dus - giris) / giris * 100
+
+                kayitlar.append({
+                    'tarih':     df_ham.index[i].strftime(tarih_fmt),
+                    'sinyal':    genel,
+                    'giris':     round(giris, 2),
+                    'max_cikis': round(max_yuk, 2),
+                    'kar_pct':   round(kar_pct, 2),
+                    'max_dd':    round(dd_pct, 2),
+                    'basari':    kar_pct >= HEDEF_PCT,
+                    'skor':      sonuc.get('sinyal_gucu', 0),
+                })
+            except Exception:
+                continue
+
+        if not kayitlar:
+            self.bitti.emit([], {})
+            return
+
+        toplam   = len(kayitlar)
+        basarili = sum(1 for k in kayitlar if k['basari'])
+        kar_list = [k['kar_pct'] for k in kayitlar]
+
+        istatistik = {
+            'toplam':   toplam,
+            'basarili': basarili,
+            'oran':     round(basarili / toplam * 100, 1) if toplam else 0,
+            'ort_kar':  round(sum(kar_list) / toplam, 2) if toplam else 0,
+            'en_iyi':   round(max(kar_list), 2) if kar_list else 0,
+            'en_kotu':  round(min(kar_list), 2) if kar_list else 0,
+        }
+
+        self.bitti.emit(list(reversed(kayitlar)), istatistik)
+
+
+# ═══════════════════════════════════════════════════════════
+# Portföy Fiyat Güncelleme Thread
+# ═══════════════════════════════════════════════════════════
+class PortfoyGuncellemeThread(QThread):
+    bitti = pyqtSignal(dict)
+
+    def run(self):
+        import yfinance as yf
+        from tarayici import _sutunlari_duzenle
+        hisseler = list(PORTFOY.aktif_listesi().keys())
+        fiyatlar = {}
+        for h in hisseler:
+            try:
+                df = yf.download(f"{h}.IS", period="2d", interval="1d",
+                                 auto_adjust=True, progress=False)
+                if df is not None and not df.empty:
+                    df = _sutunlari_duzenle(df)
+                    fiyatlar[h] = float(df['Close'].iloc[-1])
+            except Exception:
+                pass
+        self.bitti.emit(fiyatlar)
+
+
+# ═══════════════════════════════════════════════════════════
+# KAP Duyuru Thread
+# ═══════════════════════════════════════════════════════════
+class KapFetchThread(QThread):
+    bitti = pyqtSignal(list)
+    hata  = pyqtSignal(str)
+
+    def __init__(self, hisse: str):
+        super().__init__()
+        self.hisse = hisse
+
+    def run(self):
+        import requests as _req
+        try:
+            headers = {
+                'User-Agent': 'Mozilla/5.0',
+                'Accept': 'application/json',
+                'Referer': 'https://www.kap.org.tr/',
+            }
+            url = 'https://www.kap.org.tr/tr/api/memberDisclosureQuery'
+            r = _req.get(url, params={'memberCode': self.hisse, 'isLast': '1'},
+                        headers=headers, timeout=12)
+            if r.status_code == 200:
+                data = r.json()
+                duyurular = []
+                for item in (data if isinstance(data, list) else [])[:15]:
+                    duyurular.append({
+                        'baslik': item.get('title') or item.get('disclosureType', '—'),
+                        'tarih':  item.get('publishDate', ''),
+                        'tur':    item.get('disclosureType', ''),
+                        'ozet':   item.get('summary', ''),
+                    })
+                self.bitti.emit(duyurular)
+                return
+        except Exception:
+            pass
+        self.hata.emit(self.hisse)
+
 
 # ═══════════════════════════════════════════════════════════
 # Sinyal Liste Satırı
@@ -1356,6 +2261,20 @@ def _liste_satiri_olustur(sonuc: dict, pin_cb=None) -> QListWidgetItem:
 
     layout.addWidget(lbl_f)
     layout.addSpacing(4)
+
+    # Sinyal gücü skoru badge
+    skor = sonuc.get('sinyal_gucu', 0)
+    if skor > 0:
+        skor_renk = C_GREEN  if skor >= 8 else C_ORANGE if skor >= 5 else C_MUTED
+        skor_bg   = C_GREEN_DIM if skor >= 8 else "#2d1a00" if skor >= 5 else C_CARD2
+        lbl_skor  = QLabel(str(skor))
+        lbl_skor.setFixedSize(22, 22)
+        lbl_skor.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl_skor.setStyleSheet(
+            f"background:{skor_bg}; color:{skor_renk}; border-radius:11px; "
+            f"font-size:10px; font-weight:700; border:none;")
+        layout.addWidget(lbl_skor)
+        layout.addSpacing(2)
 
     # Pin butonu
     btn_pin = QPushButton("📌")
@@ -1642,6 +2561,1144 @@ class GecmisDialog(QDialog):
 
 
 # ═══════════════════════════════════════════════════════════
+# Skor Açıklama Diyaloğu
+# ═══════════════════════════════════════════════════════════
+_SKOR_TABLOSU = [
+    # (Bileşen, Puan, Açıklama)
+    ("MACD Kesişim  —  bu mumda",  "+3", "Histogram tam şu an sıfırı kesti. En taze sinyal."),
+    ("MACD Kesişim  —  1 mum önce","+2", "Geçen mumda kesti, momentum devam ediyor."),
+    ("MACD Yaklaşım",               "+1", "Histogram negatif ama ~1-2 bar içinde kesecek."),
+    ("Hacim Kırılımı  1.5–2×",     "+1", "Hacim normalin 1.5-2 katı + zirve kırıldı."),
+    ("Hacim Kırılımı  2–3×",       "+2", "Hacim 2-3 katı. Kurumsal alım izleri."),
+    ("Hacim Kırılımı  3×+",        "+3", "Hacim 3 katı üstü. Güçlü kurumsal katılım."),
+    ("Kutu Konsolidasyon",         "+2", "30 günlük dar bant, destek çoklu test edilmiş."),
+    ("Destek / Dip Sıçrama",       "+1", "Pivot destekte ya da 30 günlük dipten sekiyor."),
+    ("EMA Sıralama  (eski)",       "+1", "EMA5>8>13>21 tam hizalı ama yeni değil."),
+    ("EMA Sıralama  (yeni ✨)",    "+2", "Hizalama son 5 barda oluştu. Erken giriş fırsatı."),
+    ("RSI < 35",                   "+1", "Aşırı satım bölgesi. Dönüş olasılığı artar."),
+    ("RSI Diverjans",              "+1", "Fiyat dip yaparken RSI yapmıyor."),
+    ("RSI Diverjans  (RSI < 45)",  "+2", "Oversold'da diverjans. Daha güçlü dönüş sinyali."),
+    ("EMA21 Pullback",             "+1", "Yükselen trende EMA21'e geri gelip döndü."),
+    ("Bollinger Sıkışma",          "+1", "60 günlük en dar bant. Patlama yakın."),
+    ("Mum Formasyonu",             "+1", "Çekiç veya Yutan mum oluştu."),
+    ("Mum Formasyonu  (destek)",   "+2", "Çekiç/Yutan destek bölgesinde oluştu."),
+    ("Trend (SMA50) AL",           "+1", "Fiyat 50 günlük ortalama üstünde."),
+    ("RSI > 65",                   "−1", "Aşırı alıma yaklaşıyor. Uyarı."),
+    ("MACD Ölüm Kesişimi",        "−2", "Histogram pozitiften negatife döndü."),
+    ("Destek Kırıldı",             "−2", "Fiyat en yakın desteğin %1 altına geçti."),
+]
+
+class SkorAciklamaDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Skor Nasıl Hesaplanır?")
+        self.resize(600, 520)
+        self.setStyleSheet(f"background:{C_BG}; color:{C_TEXT};")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(10)
+
+        baslik = QLabel("🔢  Sinyal Skoru Hesaplama  (1–10)")
+        baslik.setStyleSheet(f"font-size:15px; font-weight:700; color:{C_TEXT};")
+        layout.addWidget(baslik)
+
+        acik = QLabel(
+            "Her aktif bileşen puana katkı sağlar. Toplam 1–10 arasına sıkıştırılır.\n"
+            "Aynı anda birden fazla bileşen aktifse puanlar toplanır."
+        )
+        acik.setStyleSheet(
+            f"color:{C_MUTED}; font-size:11px; background:{C_CARD}; "
+            f"border-radius:8px; padding:8px;")
+        acik.setWordWrap(True)
+        layout.addWidget(acik)
+
+        tablo = QTableWidget(len(_SKOR_TABLOSU), 3)
+        tablo.setHorizontalHeaderLabels(["Bileşen", "Puan", "Açıklama"])
+        tablo.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        tablo.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        tablo.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        tablo.verticalHeader().setVisible(False)
+        tablo.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        tablo.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        tablo.setShowGrid(False)
+        tablo.setStyleSheet(f"""
+            QTableWidget {{background:{C_CARD};color:{C_TEXT};border:none;
+                border-radius:10px;font-size:12px;}}
+            QHeaderView::section {{background:{C_CARD2};color:{C_MUTED};border:none;
+                padding:5px 8px;font-size:11px;font-weight:600;}}
+            QTableWidget::item {{padding:5px 8px;border-bottom:1px solid {C_BORDER};}}
+        """)
+
+        for satir, (bilesen, puan, aciklama) in enumerate(_SKOR_TABLOSU):
+            tablo.setItem(satir, 0, QTableWidgetItem(bilesen))
+            puan_item = QTableWidgetItem(puan)
+            puan_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            renk = C_GREEN if puan.startswith("+") else C_RED
+            puan_item.setForeground(QColor(renk))
+            tablo.setItem(satir, 1, puan_item)
+            tablo.setItem(satir, 2, QTableWidgetItem(aciklama))
+
+        layout.addWidget(tablo)
+
+        kapat = QPushButton("Kapat")
+        kapat.setFixedHeight(36)
+        kapat.setStyleSheet(
+            f"QPushButton{{background:{C_CARD2};color:{C_TEXT};border:none;"
+            f"border-radius:8px;font-size:13px;}}"
+            f"QPushButton:hover{{background:{C_BORDER};}}")
+        kapat.clicked.connect(self.accept)
+        layout.addWidget(kapat)
+
+
+# ═══════════════════════════════════════════════════════════
+# Strateji Rehberi Diyaloğu
+# ═══════════════════════════════════════════════════════════
+_STRATEJILER = [
+    ("KUTU+MACD",      "#fbbf24", "En güçlü kombinasyon",
+     "Fiyat yatay konsolidasyon kutusunda sıkışmış ve aynı anda MACD histogramı "
+     "sıfırı yukarı kesiyor. Kurumsal birikim + ivme kırılımı bir arada. "
+     "Çıkış yönü genellikle yukarı. Hedef: kutunun en az 1× genişliği kadar hareket."),
+
+    ("HACİM+MACD",     "#4ade80", "Kurumsal alım + momentum",
+     "Son N barın zirvesi kırılırken hacim ortalamanın 1.5× üstünde ve MACD kesişimi "
+     "de eşzamanlı gerçekleşiyor. 'Akıllı para' devreye girmiş gibi düşünülebilir. "
+     "Stop: kırılan direnç seviyesinin biraz altı."),
+
+    ("KUTU AL",        "#f59e0b", "Yatay konsolidasyon",
+     "Fiyat 30 günlük dar bir bantta hareket etmiş, alt desteğe en az 2 kez "
+     "dokunmuş ve son 3 kapanış desteğin üstünde. MACD henüz kesişmedi ama "
+     "bant sıkışması kırılım beklentisi yaratıyor."),
+
+    ("HACİM KIRILIM",  "#fcd34d", "Hacim destekli kırılım",
+     "Fiyat son 20 barın yüksek seviyesini kırıyor, hacim normalin 1.5× üstünde, "
+     "ve son mum yükseliş mumu. MACD teyidi yok ama hacim güçlü katılımı işaret ediyor. "
+     "Yanıltıcı kırılım riskine karşı dar stop kullan."),
+
+    ("MACD KESİŞİM",   "#38bdf8", "Taze momentum başlangıcı",
+     "MACD histogramı son 1-2 mumda negatiften pozitife geçti. Momentum yeni döndü. "
+     "Tek başına orta güç; RSI aşırı alımda değilse ve destek yakınındaysa daha sağlam."),
+
+    ("DESTEK+MACD",    "#2dd4bf", "Destek + momentum onayı",
+     "Fiyat pivot-point destekten sekiyor ve MACD aynı anda kesişiyor. "
+     "Destek bölgesinde alım baskısı + histogram dönüşü çift teyit sağlıyor. "
+     "Stop: destek seviyesinin %1 altı."),
+
+    ("DIV+MACD",       "#a855f7", "Güçlü dönüş sinyali",
+     "Fiyat daha düşük dip yaparken RSI daha yüksek dip yapıyor (bullish diverjans) "
+     "ve MACD da aynı anda kesişiyor. Genellikle trend dönümünün en erken habercisi. "
+     "RSI < 45 iken daha güçlü."),
+
+    ("EMA SIRALANMA",  "#86efac", "Boğa trendi dizilimi",
+     "EMA5 > EMA8 > EMA13 > EMA21 tam sıralaması yeni oluştu. "
+     "Fiyat EMA21'den %8'den fazla uzaklaşmamış. 'Yeni' bayraklı sinyaller daha erken yakalanmış. "
+     "Bu sıralama bozulmadıkça trend canlı kalır."),
+
+    ("RSI DİVERJANS",  "#c084fc", "Gizli dönüş işareti",
+     "Fiyat yeni dip yaparken RSI yapmıyor — satış baskısı zayıflıyor. "
+     "MACD teyidi olmadan tek başına sinyaldir; 'DIV+MACD' daha güvenilirdir. "
+     "RSI 30-45 aralığında iken en anlamlı."),
+
+    ("EMA PULLBACK",   "#67e8f9", "Yükselen trendde geri çekilme",
+     "EMA21 yükseliyor, fiyat son 5 barda EMA21'e ±%3 mesafeye gelip geri döndü. "
+     "Trende geri katılım noktası. Fiyat EMA21'den %8 fazla primli değil. "
+     "Klasik 'dip almak' stratejisinin objektif versiyonu."),
+
+    ("MACD YAKLAŞIM",  "#818cf8", "Erken pozisyon fırsatı",
+     "MACD histogramı hâlâ negatif ama 2 ardışık barda hızla yükseliyor; "
+     "doğrusal ekstrapolasyonla ~1-2 bar içinde kesişecek. "
+     "Erken girişe izin verir; kesişim olmadan stop daha geniş tutulmalı."),
+
+    ("BOL. SIKIŞMA",   "#eab308", "Patlama öncesi bant daralması",
+     "Bollinger Bantları son 60 günün en dar noktasında. Düşük volatilite her zaman "
+     "yüksek volatiliteyle sonuçlanır. MACD > 0 ise yukarı patlama olasılığı daha yüksek. "
+     "Yön teyidi olmadan pozisyon büyütme."),
+
+    ("ÇEKİÇ/YUTAN",   "#fb923c", "Mum formasyonu dönüşü",
+     "Çekiç: alt gölge gövdenin 2× uzunluğunda, satış baskısı reddedilmiş. "
+     "Yutan mum: önceki düşüş mumunu tamamen kapsayan yükseliş mumu. "
+     "Destek bölgesinde oluşursa 'güçlü' bayraklı ve daha güvenilir."),
+
+    ("DESTEK AL",      "#34d399", "Destekte tutunma",
+     "Fiyat pivot-point desteğinin %8 yakınında, son günlerde desteğin altına "
+     "inmemiş ve son 20 barda destek test edilmiş. Tek başına orta güç; "
+     "MACD veya hacim teyidi ile güçlenir."),
+
+    ("MACD ÖLÜ",       "#ff453a", "Ölüm kesişimi — zayıflama",
+     "MACD histogramı son 1-2 mumda pozitiften negatife geçti. "
+     "Momentum sona erdi. Açık pozisyon varsa trailing stop sıkıştırılmalı."),
+
+    ("DESTEK KIRILDI", "#ef4444", "Destek kırılımı — dikkat",
+     "Fiyat en yakın destek seviyesinin %1 altına geçti. "
+     "Mevcut desteğin artık direnç olması ihtimali yüksek. "
+     "Pozisyon varsa çıkış değerlendirilmeli."),
+]
+
+class StratejilerDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Strateji Rehberi")
+        self.resize(720, 640)
+        self.setStyleSheet(f"background:{C_BG}; color:{C_TEXT};")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(10)
+
+        lbl = QLabel("📖  Sinyal Stratejileri")
+        lbl.setStyleSheet(f"font-size:16px; font-weight:700; color:{C_TEXT};")
+        layout.addWidget(lbl)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet(f"QScrollArea{{border:none;background:{C_BG};}}"
+                             f"QScrollBar:vertical{{background:{C_CARD};width:6px;border-radius:3px;}}"
+                             f"QScrollBar::handle:vertical{{background:{C_BORDER};border-radius:3px;}}")
+        inner = QWidget(); inner.setStyleSheet(f"background:{C_BG};")
+        inner_layout = QVBoxLayout(inner)
+        inner_layout.setSpacing(8)
+        inner_layout.setContentsMargins(0, 0, 8, 0)
+
+        for sinyal, renk, baslik, aciklama in _STRATEJILER:
+            card = QFrame()
+            card.setStyleSheet(
+                f"QFrame{{background:{C_CARD};border:none;border-left:3px solid {renk};"
+                f"border-radius:8px;padding:2px;}}")
+            cl = QVBoxLayout(card); cl.setContentsMargins(12, 8, 12, 8); cl.setSpacing(3)
+
+            badge_row = QHBoxLayout(); badge_row.setSpacing(8)
+            badge = QLabel(sinyal)
+            badge.setStyleSheet(
+                f"background:{renk};color:#000;border-radius:5px;"
+                f"padding:2px 8px;font-size:11px;font-weight:700;")
+            baslik_lbl = QLabel(baslik)
+            baslik_lbl.setStyleSheet(f"font-size:12px;font-weight:600;color:{C_TEXT2};")
+            badge_row.addWidget(badge)
+            badge_row.addWidget(baslik_lbl)
+            badge_row.addStretch()
+            cl.addLayout(badge_row)
+
+            acikl_lbl = QLabel(aciklama)
+            acikl_lbl.setWordWrap(True)
+            acikl_lbl.setStyleSheet(f"font-size:12px;color:{C_MUTED};line-height:1.4;")
+            cl.addWidget(acikl_lbl)
+            inner_layout.addWidget(card)
+
+        inner_layout.addStretch()
+        scroll.setWidget(inner)
+        layout.addWidget(scroll)
+
+        kapat = QPushButton("Kapat")
+        kapat.setFixedHeight(36)
+        kapat.setStyleSheet(
+            f"QPushButton{{background:{C_CARD2};color:{C_TEXT};border:none;"
+            f"border-radius:8px;font-size:13px;}}"
+            f"QPushButton:hover{{background:{C_BORDER};}}")
+        kapat.clicked.connect(self.accept)
+        layout.addWidget(kapat)
+
+
+# ═══════════════════════════════════════════════════════════
+# Telegram Ayar Diyaloğu
+# ═══════════════════════════════════════════════════════════
+class TelegramAyarDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Telegram Bildirimleri")
+        self.resize(480, 400)
+        self.setStyleSheet(f"background:{C_BG}; color:{C_TEXT};")
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(20, 20, 20, 20)
+        root.setSpacing(10)
+
+        lbl = QLabel("🤖  Telegram Bot Ayarları")
+        lbl.setStyleSheet(f"color:{C_TEXT}; font-size:15px; font-weight:700;")
+        root.addWidget(lbl)
+
+        acik = QLabel(
+            "1. Telegram'da @BotFather'a /newbot yaz → Token'ı kopyala\n"
+            "2. Oluşturduğun bota /start mesajını gönder\n"
+            "3. Token'ı girdikten sonra 'Chat ID Bul' butonuna bas")
+        acik.setStyleSheet(
+            f"color:{C_MUTED}; font-size:11px; background:{C_CARD}; "
+            f"border-radius:8px; padding:8px;")
+        acik.setWordWrap(True)
+        root.addWidget(acik)
+
+        form = QGridLayout()
+        form.setSpacing(8)
+        form.setColumnMinimumWidth(0, 90)
+
+        def _lbl(t):
+            l = QLabel(t)
+            l.setStyleSheet(f"color:{C_MUTED}; font-size:12px;")
+            return l
+
+        self.txt_token = QLineEdit(TELEGRAM.token)
+        self.txt_token.setPlaceholderText("1234567890:ABCdefGHIjklMNOpqrSTU…")
+        self.txt_token.setFixedHeight(34)
+
+        # Chat ID satırı: input + "Otomatik Bul" butonu yan yana
+        self.txt_chat = QLineEdit(TELEGRAM.chat_id)
+        self.txt_chat.setPlaceholderText("123456789")
+        self.txt_chat.setFixedHeight(34)
+        btn_bul = QPushButton("Chat ID Bul")
+        btn_bul.setFixedHeight(34)
+        btn_bul.setStyleSheet(
+            f"QPushButton{{background:{C_CARD2};color:{C_TEXT};border:none;"
+            f"border-radius:8px;font-size:11px;padding:0 10px;}}"
+            f"QPushButton:hover{{background:#48484a;}}")
+        btn_bul.clicked.connect(self._chat_id_bul)
+
+        chat_row = QHBoxLayout()
+        chat_row.setSpacing(6)
+        chat_row.addWidget(self.txt_chat)
+        chat_row.addWidget(btn_bul)
+
+        form.addWidget(_lbl("Bot Token:"), 0, 0)
+        form.addWidget(self.txt_token,     0, 1)
+        form.addWidget(_lbl("Chat ID:"),   1, 0)
+        form.addLayout(chat_row,           1, 1)
+        root.addLayout(form)
+
+        self.chk_aktif = QCheckBox("Bildirimleri etkinleştir")
+        self.chk_aktif.setChecked(TELEGRAM.aktif)
+        self.chk_aktif.setStyleSheet(f"color:{C_TEXT}; font-size:13px;")
+        root.addWidget(self.chk_aktif)
+
+        sinyal_lay = QHBoxLayout()
+        self.chk_sinyal = QCheckBox("Güçlü sinyal gelince bildir  —  min. skor:")
+        self.chk_sinyal.setChecked(TELEGRAM.guclu_sinyal)
+        self.chk_sinyal.setStyleSheet(f"color:{C_TEXT}; font-size:13px;")
+        self.cmb_skor = QComboBox()
+        for i in range(5, 11):
+            self.cmb_skor.addItem(str(i))
+        self.cmb_skor.setCurrentText(str(TELEGRAM.min_guc))
+        self.cmb_skor.setFixedWidth(60)
+        self.cmb_skor.setFixedHeight(28)
+        sinyal_lay.addWidget(self.chk_sinyal)
+        sinyal_lay.addWidget(self.cmb_skor)
+        sinyal_lay.addStretch()
+        root.addLayout(sinyal_lay)
+
+        lnk = QLabel('<a href="#" style="color:#0a84ff;font-size:11px;">'
+                     'ℹ️  Skor nasıl hesaplanır? →</a>')
+        lnk.setStyleSheet("background:transparent; border:none;")
+        lnk.setCursor(Qt.CursorShape.PointingHandCursor)
+        lnk.linkActivated.connect(lambda _: SkorAciklamaDialog(self).exec())
+        root.addWidget(lnk)
+
+        root.addStretch()
+
+        alt = QHBoxLayout()
+        self.btn_test = QPushButton("Test Gönder")
+        self.btn_test.setFixedHeight(34)
+        self.btn_test.setStyleSheet(
+            f"QPushButton{{background:{C_CARD2};color:{C_TEXT};border:none;"
+            f"border-radius:8px;font-size:12px;padding:0 14px;}}"
+            f"QPushButton:hover{{background:#48484a;}}")
+        self.btn_test.clicked.connect(self._test)
+
+        btn_k = QPushButton("Kaydet")
+        btn_k.setFixedSize(80, 34)
+        btn_k.setStyleSheet(
+            f"QPushButton{{background:{C_BLUE};color:#fff;border:none;"
+            f"border-radius:8px;font-size:12px;font-weight:600;padding:0;}}"
+            f"QPushButton:hover{{background:#1a8fff;}}")
+        btn_k.clicked.connect(self._kaydet)
+
+        btn_c = QPushButton("Kapat")
+        btn_c.setFixedSize(70, 34)
+        btn_c.setStyleSheet(
+            f"QPushButton{{background:{C_CARD2};color:{C_MUTED};border:none;"
+            f"border-radius:8px;font-size:12px;padding:0;}}"
+            f"QPushButton:hover{{background:#48484a;color:{C_TEXT};}}")
+        btn_c.clicked.connect(self.close)
+
+        alt.addWidget(self.btn_test)
+        alt.addStretch()
+        alt.addWidget(btn_k)
+        alt.addSpacing(6)
+        alt.addWidget(btn_c)
+        root.addLayout(alt)
+
+    def _kaydet(self):
+        TELEGRAM.set(
+            token=self.txt_token.text().strip(),
+            chat_id=self.txt_chat.text().strip(),
+            aktif=self.chk_aktif.isChecked(),
+            guclu_sinyal=self.chk_sinyal.isChecked(),
+            min_guc=int(self.cmb_skor.currentText()),
+        )
+        durum = "etkin" if self.chk_aktif.isChecked() else "devre dışı"
+        QMessageBox.information(self, "Kaydedildi",
+            f"Telegram ayarları kaydedildi.\nBildirimler: {durum}")
+
+    def _chat_id_bul(self):
+        """Token ile getUpdates çağırır, son mesajı gönderen kullanıcının chat_id'sini doldurur."""
+        token = self.txt_token.text().strip()
+        if not token:
+            QMessageBox.warning(self, "Eksik", "Önce Bot Token'ı gir.")
+            return
+        try:
+            import requests as _req
+            r = _req.get(
+                f"https://api.telegram.org/bot{token}/getUpdates",
+                timeout=8)
+            data = r.json()
+            if not data.get('ok'):
+                hata = data.get('description', 'Bilinmeyen hata')
+                QMessageBox.warning(self, "Telegram Hatası",
+                    f"API yanıtı:\n{hata}\n\n"
+                    "Token'ı kontrol et. @BotFather'dan kopyaladığın tam token olmalı.")
+                return
+            updates = data.get('result', [])
+            if not updates:
+                QMessageBox.warning(self, "Mesaj Bulunamadı",
+                    "Bot henüz hiç mesaj almamış.\n\n"
+                    "Telegram'da botunu aç ve /start yaz,\nsonra tekrar dene.")
+                return
+            # En son mesajdaki chat_id'yi al
+            son = updates[-1]
+            chat = (son.get('message') or son.get('channel_post') or {}).get('chat', {})
+            cid  = str(chat.get('id', ''))
+            ad   = chat.get('first_name') or chat.get('title') or ''
+            if cid:
+                self.txt_chat.setText(cid)
+                QMessageBox.information(self, "Chat ID Bulundu",
+                    f"Chat ID: {cid}  ({ad})\nAlana otomatik girildi.")
+            else:
+                QMessageBox.warning(self, "Bulunamadı",
+                    "Güncelleme var ama chat_id çıkarılamadı.\nManuel gir.")
+        except Exception as e:
+            QMessageBox.warning(self, "Bağlantı Hatası", f"İnternet bağlantısını kontrol et.\n\n{e}")
+
+    def _test(self):
+        """Token+Chat ID ile doğrudan API çağrısı yapar, hata varsa tam mesajı gösterir."""
+        self._kaydet()
+        token   = self.txt_token.text().strip()
+        chat_id = self.txt_chat.text().strip()
+
+        if not token:
+            QMessageBox.warning(self, "Eksik", "Bot Token boş.")
+            return
+        if not chat_id:
+            QMessageBox.warning(self, "Eksik", "Chat ID boş.\n'Chat ID Bul' butonunu kullan.")
+            return
+
+        try:
+            import requests as _req
+            r = _req.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={'chat_id': chat_id,
+                      'text': "🧪 <b>BIST Sinyal Tarayıcısı</b>\nBağlantı testi başarılı ✓",
+                      'parse_mode': 'HTML'},
+                timeout=8)
+            data = r.json()
+            if data.get('ok'):
+                QMessageBox.information(self, "Başarılı", "Mesaj gönderildi ✓\nTelegram bağlantısı çalışıyor.")
+            else:
+                kod   = data.get('error_code', '')
+                acikl = data.get('description', '')
+                ipucu = ""
+                if kod == 401:
+                    ipucu = "\n\nToken yanlış. @BotFather'dan kopyaladığın tam token olmalı."
+                elif "chat not found" in acikl.lower():
+                    ipucu = "\n\nChat ID yanlış veya bota hiç mesaj gönderilmemiş.\n'Chat ID Bul' butonunu kullan."
+                elif "blocked" in acikl.lower():
+                    ipucu = "\n\nKullanıcı botu engellemiş."
+                QMessageBox.warning(self, f"Telegram Hatası ({kod})",
+                    f"{acikl}{ipucu}")
+        except Exception as e:
+            QMessageBox.warning(self, "Bağlantı Hatası",
+                f"Sunucuya ulaşılamadı.\nİnternet bağlantısını kontrol et.\n\n{e}")
+
+
+# ═══════════════════════════════════════════════════════════
+# Portföy Diyaloğu
+# ═══════════════════════════════════════════════════════════
+_TBL_QSS = f"""
+QTableWidget {{
+    background:{C_CARD}; color:{C_TEXT}; border:none; border-radius:10px;
+    gridline-color:{C_BORDER}; font-size:12px;
+}}
+QHeaderView::section {{
+    background:{C_CARD2}; color:{C_MUTED}; border:none;
+    padding:5px 8px; font-size:11px; font-weight:600;
+}}
+QTableWidget::item {{ padding:4px 8px; border:none; }}
+QTableWidget::item:selected {{ background:#0a84ff22; }}
+"""
+
+class PortfoyDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Portföy Takibi")
+        self.resize(740, 520)
+        self.setStyleSheet(f"background:{C_BG}; color:{C_TEXT};")
+        self._gun_thread  = None
+        self._gun_fiyatlar = {}
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 16, 16, 16)
+        root.setSpacing(10)
+
+        hdr = QHBoxLayout()
+        lbl = QLabel("📊  Portföy Takibi")
+        lbl.setStyleSheet(f"color:{C_TEXT}; font-size:15px; font-weight:700;")
+        hdr.addWidget(lbl)
+        hdr.addStretch()
+
+        self.lbl_ozet = QLabel("")
+        self.lbl_ozet.setStyleSheet(f"color:{C_MUTED}; font-size:11px;")
+        hdr.addWidget(self.lbl_ozet)
+        hdr.addSpacing(8)
+
+        self.btn_gun = QPushButton("↻  Fiyat Güncelle")
+        self.btn_gun.setFixedHeight(30)
+        self.btn_gun.setStyleSheet(
+            f"QPushButton{{background:{C_CARD2};color:{C_MUTED};border:none;"
+            f"border-radius:8px;font-size:11px;padding:0 12px;}}"
+            f"QPushButton:hover{{background:#48484a;color:{C_TEXT};}}")
+        self.btn_gun.clicked.connect(self._fiyat_guncelle)
+        hdr.addWidget(self.btn_gun)
+
+        btn_yeni = QPushButton("＋  Yeni Pozisyon")
+        btn_yeni.setFixedHeight(30)
+        btn_yeni.setStyleSheet(
+            f"QPushButton{{background:{C_BLUE};color:#fff;border:none;"
+            f"border-radius:8px;font-size:11px;font-weight:600;padding:0 12px;}}"
+            f"QPushButton:hover{{background:#1a8fff;}}")
+        btn_yeni.clicked.connect(self._yeni_pozisyon)
+        hdr.addWidget(btn_yeni)
+        root.addLayout(hdr)
+
+        # Tabs
+        self.tabs = QTabWidget()
+        self.tabs.setStyleSheet(f"""
+            QTabWidget::pane {{ border:none; background:{C_BG}; }}
+            QTabBar::tab {{ background:{C_CARD2}; color:{C_MUTED}; border:none;
+                border-radius:6px; padding:6px 16px; margin-right:4px; font-size:12px; }}
+            QTabBar::tab:selected {{ background:{C_CARD}; color:{C_TEXT}; font-weight:600; }}
+        """)
+
+        # Tab 1 — Açık pozisyonlar
+        t1 = QWidget()
+        t1l = QVBoxLayout(t1)
+        t1l.setContentsMargins(0, 8, 0, 0)
+        self.tbl_aktif = QTableWidget()
+        self.tbl_aktif.setColumnCount(7)
+        self.tbl_aktif.setHorizontalHeaderLabels(
+            ["Hisse", "Giriş ₺", "Güncel ₺", "K/Z %", "Lot", "Tarih", ""])
+        self.tbl_aktif.setStyleSheet(_TBL_QSS)
+        h1 = self.tbl_aktif.horizontalHeader()
+        for c in range(6):
+            h1.setSectionResizeMode(c, QHeaderView.ResizeMode.ResizeToContents
+                                    if c < 5 else QHeaderView.ResizeMode.Stretch)
+        h1.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
+        self.tbl_aktif.setColumnWidth(6, 80)
+        self.tbl_aktif.verticalHeader().setVisible(False)
+        self.tbl_aktif.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.tbl_aktif.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        t1l.addWidget(self.tbl_aktif)
+
+        # Tab 2 — Geçmiş
+        t2 = QWidget()
+        t2l = QVBoxLayout(t2)
+        t2l.setContentsMargins(0, 8, 0, 0)
+        self.tbl_gecmis = QTableWidget()
+        self.tbl_gecmis.setColumnCount(6)
+        self.tbl_gecmis.setHorizontalHeaderLabels(
+            ["Hisse", "Giriş ₺", "Çıkış ₺", "K/Z %", "Lot", "Tarih"])
+        self.tbl_gecmis.setStyleSheet(_TBL_QSS)
+        h2 = self.tbl_gecmis.horizontalHeader()
+        for c in range(6):
+            h2.setSectionResizeMode(c, QHeaderView.ResizeMode.ResizeToContents
+                                    if c < 5 else QHeaderView.ResizeMode.Stretch)
+        self.tbl_gecmis.verticalHeader().setVisible(False)
+        self.tbl_gecmis.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        t2l.addWidget(self.tbl_gecmis)
+
+        self.tabs.addTab(t1, "Açık Pozisyonlar")
+        self.tabs.addTab(t2, "Geçmiş")
+        root.addWidget(self.tabs)
+
+        alt = QHBoxLayout()
+        btn_c = QPushButton("Kapat")
+        btn_c.setFixedSize(80, 32)
+        btn_c.setStyleSheet(
+            f"QPushButton{{background:{C_CARD2};color:{C_MUTED};border:none;"
+            f"border-radius:8px;font-size:12px;padding:0;}}"
+            f"QPushButton:hover{{background:#48484a;color:{C_TEXT};}}")
+        btn_c.clicked.connect(self.close)
+        alt.addStretch()
+        alt.addWidget(btn_c)
+        root.addLayout(alt)
+
+        self._listele()
+
+    def _listele(self):
+        aktif = PORTFOY.aktif_listesi()
+        self.tbl_aktif.setRowCount(len(aktif))
+        for row, (hisse, p) in enumerate(aktif.items()):
+            giris  = p['giris']
+            guncel = self._gun_fiyatlar.get(hisse, giris)
+            kz     = (guncel - giris) / giris * 100
+            kz_r   = C_GREEN if kz >= 0 else C_RED
+            vals   = [
+                (hisse,                        C_TEXT,  True),
+                (f"₺{giris:,.2f}",             C_MUTED, False),
+                (f"₺{guncel:,.2f}",            C_TEXT,  False),
+                (f"{'+' if kz>=0 else ''}{kz:.2f}%", kz_r, True),
+                (str(p['lot']),                C_MUTED, False),
+                (p['tarih'],                   C_MUTED, False),
+            ]
+            for col, (txt, renk, bold) in enumerate(vals):
+                it = QTableWidgetItem(txt)
+                it.setForeground(QColor(renk))
+                if bold:
+                    it.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
+                self.tbl_aktif.setItem(row, col, it)
+            self.tbl_aktif.setRowHeight(row, 36)
+            btn = QPushButton("Kapat")
+            btn.setStyleSheet(
+                f"QPushButton{{background:{C_RED_DIM};color:{C_RED};border:none;"
+                f"border-radius:6px;font-size:11px;font-weight:600;margin:4px;}}"
+                f"QPushButton:hover{{background:{C_RED};color:#fff;}}")
+            btn.clicked.connect(lambda _, h=hisse: self._kapat_dialog(h))
+            self.tbl_aktif.setCellWidget(row, 6, btn)
+
+        self.lbl_ozet.setText(f"{len(aktif)} açık pozisyon")
+
+        gecmis = PORTFOY.gecmis_listesi()
+        self.tbl_gecmis.setRowCount(len(gecmis))
+        for row, k in enumerate(gecmis):
+            kz_r = C_GREEN if k['kar_yuzde'] >= 0 else C_RED
+            kz   = k['kar_yuzde']
+            vals = [
+                (k['hisse'],                         C_TEXT,  True),
+                (f"₺{k['giris']:,.2f}",              C_MUTED, False),
+                (f"₺{k['cikis']:,.2f}",              C_MUTED, False),
+                (f"{'+' if kz>=0 else ''}{kz:.2f}%", kz_r,   True),
+                (str(k['lot']),                      C_MUTED, False),
+                (k['tarih_cikis'],                   C_MUTED, False),
+            ]
+            for col, (txt, renk, bold) in enumerate(vals):
+                it = QTableWidgetItem(txt)
+                it.setForeground(QColor(renk))
+                if bold:
+                    it.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
+                self.tbl_gecmis.setItem(row, col, it)
+            self.tbl_gecmis.setRowHeight(row, 30)
+
+    def _kapat_dialog(self, hisse):
+        p      = PORTFOY.pozisyon(hisse)
+        guncel = self._gun_fiyatlar.get(hisse, p['giris'] if p else 0)
+        cikis, ok = QInputDialog.getDouble(
+            self, f"{hisse} — Pozisyon Kapat", "Çıkış fiyatı (₺):",
+            value=round(guncel, 2), min=0.01, max=999999.99, decimals=2)
+        if ok:
+            PORTFOY.pozisyon_kapat(hisse, cikis)
+            self._listele()
+
+    def _yeni_pozisyon(self):
+        hisse, ok = QInputDialog.getText(self, "Yeni Pozisyon", "Hisse kodu:")
+        if not ok or not hisse.strip():
+            return
+        hisse = hisse.strip().upper()
+        giris, ok = QInputDialog.getDouble(
+            self, "Giriş Fiyatı", f"{hisse} — giriş fiyatı (₺):",
+            value=0.0, min=0.01, max=999999.99, decimals=2)
+        if not ok:
+            return
+        lot, ok = QInputDialog.getInt(
+            self, "Lot Sayısı", f"{hisse} — lot / adet:", value=1, min=1, max=1_000_000)
+        if ok:
+            PORTFOY.pozisyon_ac(hisse, giris, lot)
+            self._listele()
+
+    def _fiyat_guncelle(self):
+        self.btn_gun.setText("↻  Güncelleniyor…")
+        self.btn_gun.setEnabled(False)
+        self._gun_thread = PortfoyGuncellemeThread()
+        self._gun_thread.bitti.connect(self._guncelleme_bitti)
+        self._gun_thread.start()
+
+    def _guncelleme_bitti(self, fiyatlar):
+        self._gun_fiyatlar = fiyatlar
+        self.btn_gun.setText("↻  Fiyat Güncelle")
+        self.btn_gun.setEnabled(True)
+        self._listele()
+
+
+# ═══════════════════════════════════════════════════════════
+# Backtest Diyaloğu
+# ═══════════════════════════════════════════════════════════
+class BacktestDialog(QDialog):
+    def __init__(self, parent=None, hisse=''):
+        super().__init__(parent)
+        self.setWindowTitle("Backtest")
+        self.resize(820, 580)
+        self.setStyleSheet(f"background:{C_BG}; color:{C_TEXT};")
+        self._bt_thread = None
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 16, 16, 16)
+        root.setSpacing(10)
+
+        self.lbl_baslik = QLabel("🧪  Strateji Backtest  —  Günlük  ·  Hedef: %5 kâr / 10 bar")
+        self.lbl_baslik.setStyleSheet(f"color:{C_TEXT}; font-size:14px; font-weight:700;")
+        root.addWidget(self.lbl_baslik)
+
+        # Giriş satırı
+        gir = QHBoxLayout()
+        lbl_h = QLabel("Hisse:")
+        lbl_h.setStyleSheet(f"color:{C_MUTED}; font-size:12px;")
+        self.txt_h = QLineEdit(hisse)
+        self.txt_h.setPlaceholderText("THYAO")
+        self.txt_h.setFixedSize(120, 36)
+
+        # Periyot seçici
+        self._bt_periyot = '1d'
+        self._bt_per_btns = {}
+        seg = QWidget()
+        seg.setFixedHeight(36)
+        seg.setStyleSheet(f"background:{C_CARD2}; border-radius:10px;")
+        seg_l = QHBoxLayout(seg)
+        seg_l.setContentsMargins(3, 3, 3, 3)
+        seg_l.setSpacing(2)
+        _PER_BT_CFG = [('1S', '1h', '730g  ·  Hedef: %5 / 20 bar'),
+                       ('4S', '4h', '730g  ·  Hedef: %5 / 10 bar'),
+                       ('Gün', '1d', '2 Yıl  ·  Hedef: %5 / 10 bar')]
+        for etiket, kod, _ in _PER_BT_CFG:
+            btn = QPushButton(etiket)
+            btn.setCheckable(True)
+            btn.setChecked(kod == '1d')
+            btn.setFixedSize(42, 30)
+            btn.setStyleSheet(_seg_btn_stili(kod == '1d'))
+            btn.clicked.connect(lambda _, k=kod: self._bt_per_sec(k))
+            self._bt_per_btns[kod] = btn
+            seg_l.addWidget(btn)
+        self._bt_per_captions = {k: c for _, k, c in _PER_BT_CFG}
+
+        self.btn_bas = QPushButton("▶  Başlat")
+        self.btn_bas.setFixedSize(100, 36)
+        self.btn_bas.setStyleSheet(
+            f"QPushButton{{background:{C_GREEN};color:#fff;border:none;"
+            f"border-radius:10px;font-size:13px;font-weight:600;padding:0;}}"
+            f"QPushButton:hover{{background:#34e35e;}}")
+        self.btn_bas.clicked.connect(self._baslat)
+        self.prog = QProgressBar()
+        self.prog.setValue(0)
+        self.prog.setFixedHeight(4)
+        self.prog.setTextVisible(False)
+        gir.addWidget(lbl_h)
+        gir.addWidget(self.txt_h)
+        gir.addSpacing(8)
+        gir.addWidget(seg)
+        gir.addSpacing(8)
+        gir.addWidget(self.btn_bas)
+        gir.addSpacing(10)
+        gir.addWidget(self.prog, stretch=1)
+        root.addLayout(gir)
+
+        # Özet strip
+        ozet_f = QFrame()
+        ozet_f.setFixedHeight(62)
+        ozet_f.setStyleSheet(f"background:{C_CARD}; border-radius:10px;")
+        ozet_l = QHBoxLayout(ozet_f)
+        ozet_l.setContentsMargins(16, 8, 16, 8)
+        self._ozlbl = {}
+        for key, cap in [('toplam','Toplam Sinyal'), ('oran','Başarı Oranı'),
+                         ('ort_kar','Ort. Max K/Z'), ('en_iyi','En İyi'), ('en_kotu','En Kötü')]:
+            frm = QFrame()
+            fl  = QVBoxLayout(frm)
+            fl.setContentsMargins(0,0,0,0)
+            fl.setSpacing(2)
+            lk  = QLabel(cap)
+            lk.setStyleSheet(f"color:{C_MUTED}; font-size:10px; font-weight:500;")
+            lv  = QLabel("—")
+            lv.setStyleSheet(f"color:{C_TEXT}; font-size:14px; font-weight:700;")
+            fl.addWidget(lk)
+            fl.addWidget(lv)
+            self._ozlbl[key] = lv
+            ozet_l.addWidget(frm)
+            if key != 'en_kotu':
+                sep = QFrame()
+                sep.setFrameShape(QFrame.Shape.VLine)
+                sep.setStyleSheet(f"color:{C_BORDER};")
+                ozet_l.addWidget(sep)
+        root.addWidget(ozet_f)
+
+        # Tablo
+        self.table = QTableWidget()
+        self.table.setColumnCount(7)
+        self.table.setHorizontalHeaderLabels(
+            ["Tarih", "Sinyal", "Skor", "Giriş ₺", "Maks ₺", "Max K/Z %", "✓"])
+        self.table.setStyleSheet(_TBL_QSS)
+        th = self.table.horizontalHeader()
+        th.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        th.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        th.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(2, 44)
+        th.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        th.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        th.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        th.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(6, 30)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        root.addWidget(self.table)
+
+        alt = QHBoxLayout()
+        btn_c = QPushButton("Kapat")
+        btn_c.setFixedSize(80, 32)
+        btn_c.setStyleSheet(
+            f"QPushButton{{background:{C_CARD2};color:{C_MUTED};border:none;"
+            f"border-radius:8px;font-size:12px;padding:0;}}"
+            f"QPushButton:hover{{background:#48484a;color:{C_TEXT};}}")
+        btn_c.clicked.connect(self.close)
+        alt.addStretch()
+        alt.addWidget(btn_c)
+        root.addLayout(alt)
+
+    def _bt_per_sec(self, kod: str):
+        self._bt_periyot = kod
+        for k, btn in self._bt_per_btns.items():
+            btn.setChecked(k == kod)
+            btn.setStyleSheet(_seg_btn_stili(k == kod))
+        cap = self._bt_per_captions.get(kod, '')
+        per_ad = {'1h': '1 Saatlik', '4h': '4 Saatlik', '1d': 'Günlük'}.get(kod, '')
+        self.lbl_baslik.setText(f"🧪  Strateji Backtest  —  {per_ad}  ·  {cap}")
+
+    def _baslat(self):
+        hisse = self.txt_h.text().strip().upper()
+        if not hisse:
+            return
+        if self._bt_thread and self._bt_thread.isRunning():
+            self._bt_thread.dur()
+            self.btn_bas.setText("▶  Başlat")
+            return
+        self.table.setRowCount(0)
+        for v in self._ozlbl.values():
+            v.setText("—")
+            v.setStyleSheet(f"color:{C_TEXT}; font-size:14px; font-weight:700;")
+        self.prog.setValue(0)
+        self.btn_bas.setText("■  Durdur")
+
+        self._bt_thread = BacktestThread(hisse, self._bt_periyot)
+        self._bt_thread.ilerleme.connect(
+            lambda m, t: self.prog.setValue(int(m / t * 100) if t else 0))
+        self._bt_thread.bitti.connect(self._bitti)
+        self._bt_thread.start()
+
+    def _bitti(self, kayitlar, ist):
+        self.btn_bas.setText("▶  Başlat")
+        self.prog.setValue(100)
+        if not kayitlar:
+            QMessageBox.information(self, "Backtest", "Yeterli sinyal bulunamadı.")
+            return
+
+        hisse = self.txt_h.text().strip().upper()
+        if hisse:
+            BACKTEST_SONUCLARI.kaydet_sonuc(hisse, self._bt_periyot, ist)
+
+        def _renk_set(lbl, txt, renk):
+            lbl.setText(txt)
+            lbl.setStyleSheet(f"color:{renk}; font-size:14px; font-weight:700;")
+
+        self._ozlbl['toplam'].setText(str(ist['toplam']))
+        oran = ist['oran']
+        _renk_set(self._ozlbl['oran'], f"%{oran}",
+                  C_GREEN if oran >= 60 else C_ORANGE if oran >= 40 else C_RED)
+        ok  = ist['ort_kar']
+        _renk_set(self._ozlbl['ort_kar'], f"{'+' if ok>=0 else ''}{ok:.1f}%",
+                  C_GREEN if ok >= 0 else C_RED)
+        _renk_set(self._ozlbl['en_iyi'],  f"+{ist['en_iyi']:.1f}%",  C_GREEN)
+        _renk_set(self._ozlbl['en_kotu'], f"{ist['en_kotu']:.1f}%",  C_RED)
+
+        self.table.setRowCount(len(kayitlar))
+        for row, k in enumerate(kayitlar):
+            s_renk = SINYAL_RENK.get(k['sinyal'], C_MUTED)
+            k_renk = C_GREEN if k['kar_pct'] >= 0 else C_RED
+            skor   = k['skor']
+            s_bg   = C_GREEN_DIM if skor >= 8 else "#2d1a00" if skor >= 5 else C_CARD2
+            s_cr   = C_GREEN if skor >= 8 else C_ORANGE if skor >= 5 else C_MUTED
+
+            cols = [
+                (k['tarih'],          C_MUTED,  False),
+                (k['sinyal'],         s_renk,   True),
+                (str(skor),           s_cr,     True),
+                (f"₺{k['giris']:,.2f}", C_TEXT, False),
+                (f"₺{k['max_cikis']:,.2f}", C_TEXT, False),
+                (f"{'+' if k['kar_pct']>=0 else ''}{k['kar_pct']:.1f}%", k_renk, True),
+                ("✓" if k['basari'] else "✗",
+                 C_GREEN if k['basari'] else C_RED, True),
+            ]
+            for col, (txt, renk, bold) in enumerate(cols):
+                it = QTableWidgetItem(txt)
+                it.setForeground(QColor(renk))
+                it.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+                if bold:
+                    it.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+                self.table.setItem(row, col, it)
+            self.table.setRowHeight(row, 28)
+
+
+# ═══════════════════════════════════════════════════════════
+# Risk Ayar Diyaloğu
+# ═══════════════════════════════════════════════════════════
+class RiskAyarDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Risk Ayarları")
+        self.resize(360, 220)
+        self.setStyleSheet(f"background:{C_BG}; color:{C_TEXT};")
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(20, 20, 20, 20)
+        root.setSpacing(12)
+
+        lbl = QLabel("⚖  Risk Ayarları")
+        lbl.setStyleSheet(f"color:{C_TEXT}; font-size:15px; font-weight:700;")
+        root.addWidget(lbl)
+
+        acik = QLabel("Pozisyon büyüklüğü hesaplamak için sermaye ve\nmaksimum risk oranını girin.")
+        acik.setStyleSheet(f"color:{C_MUTED}; font-size:11px;")
+        root.addWidget(acik)
+
+        form = QGridLayout()
+        form.setSpacing(8)
+        form.setColumnMinimumWidth(0, 130)
+
+        def _lbl(t):
+            l = QLabel(t); l.setStyleSheet(f"color:{C_MUTED}; font-size:12px;"); return l
+
+        self.txt_sermaye = QLineEdit(str(int(RISK_AYAR.sermaye)))
+        self.txt_sermaye.setFixedHeight(34)
+        self.txt_risk = QLineEdit(str(RISK_AYAR.max_risk_pct))
+        self.txt_risk.setFixedHeight(34)
+        form.addWidget(_lbl("Toplam Sermaye (₺):"), 0, 0)
+        form.addWidget(self.txt_sermaye, 0, 1)
+        form.addWidget(_lbl("Maks. Risk (%):"), 1, 0)
+        form.addWidget(self.txt_risk, 1, 1)
+        root.addLayout(form)
+        root.addStretch()
+
+        alt = QHBoxLayout()
+        btn_k = QPushButton("Kaydet")
+        btn_k.setFixedSize(80, 34)
+        btn_k.setStyleSheet(
+            f"QPushButton{{background:{C_BLUE};color:#fff;border:none;"
+            f"border-radius:8px;font-size:12px;font-weight:600;padding:0;}}"
+            f"QPushButton:hover{{background:#1a8fff;}}")
+        btn_k.clicked.connect(self._kaydet)
+        btn_c = QPushButton("Kapat")
+        btn_c.setFixedSize(70, 34)
+        btn_c.setStyleSheet(
+            f"QPushButton{{background:{C_CARD2};color:{C_MUTED};border:none;"
+            f"border-radius:8px;font-size:12px;padding:0;}}"
+            f"QPushButton:hover{{background:#48484a;color:{C_TEXT};}}")
+        btn_c.clicked.connect(self.close)
+        alt.addStretch()
+        alt.addWidget(btn_k)
+        alt.addSpacing(6)
+        alt.addWidget(btn_c)
+        root.addLayout(alt)
+
+    def _kaydet(self):
+        try:
+            s = float(self.txt_sermaye.text().replace(',', '.'))
+            r = float(self.txt_risk.text().replace(',', '.'))
+            RISK_AYAR.set(sermaye=s, max_risk_pct=r)
+            self.close()
+        except ValueError:
+            QMessageBox.warning(self, "Hata", "Geçerli bir sayı girin.")
+
+
+# ═══════════════════════════════════════════════════════════
+# Neden Bu Sinyal Diyaloğu
+# ═══════════════════════════════════════════════════════════
+class NedenDialog(QDialog):
+    def __init__(self, sonuc: dict, parent=None):
+        super().__init__(parent)
+        hisse = sonuc.get('hisse', '')
+        self.setWindowTitle(f"Neden Bu Sinyal?  —  {hisse}")
+        self.resize(420, 590)
+        self.setStyleSheet(f"background:{C_BG}; color:{C_TEXT};")
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(20, 20, 20, 20)
+        root.setSpacing(8)
+
+        skor  = sonuc.get('sinyal_gucu', 0)
+        genel = sonuc.get('genel_sinyal', 'NÖTR')
+        skor_renk = C_GREEN if skor >= 8 else C_ORANGE if skor >= 5 else C_RED
+
+        hdr = QHBoxLayout()
+        lbl_h = QLabel(f"🔍  {hisse}  —  {genel}")
+        lbl_h.setStyleSheet(f"color:{C_TEXT}; font-size:15px; font-weight:700;")
+        lbl_s = QLabel(f"Skor {skor}/10")
+        lbl_s.setStyleSheet(
+            f"color:{skor_renk}; font-size:13px; font-weight:700; "
+            f"background:{C_CARD2}; border-radius:8px; padding:4px 10px;")
+        hdr.addWidget(lbl_h)
+        hdr.addStretch()
+        hdr.addWidget(lbl_s)
+        root.addLayout(hdr)
+
+        for baslik, aktif, aciklama in self._kriterler(sonuc):
+            frm = QFrame()
+            frm.setFixedHeight(38)
+            frm.setStyleSheet(
+                f"background:{C_CARD if aktif else C_BG}; border-radius:8px; border:none;")
+            fl = QHBoxLayout(frm)
+            fl.setContentsMargins(10, 0, 10, 0)
+            fl.setSpacing(8)
+
+            lbl_ikon = QLabel("✓" if aktif else "✗")
+            lbl_ikon.setFixedWidth(16)
+            lbl_ikon.setStyleSheet(
+                f"color:{C_GREEN if aktif else C_RED}; font-size:14px; font-weight:700;")
+            lbl_ad = QLabel(baslik)
+            lbl_ad.setStyleSheet(
+                f"color:{C_TEXT if aktif else C_MUTED}; font-size:13px; "
+                f"font-weight:{'600' if aktif else '400'};")
+            lbl_ac = QLabel(aciklama)
+            lbl_ac.setStyleSheet(f"color:{C_MUTED}; font-size:11px;")
+            lbl_ac.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+            fl.addWidget(lbl_ikon)
+            fl.addWidget(lbl_ad)
+            fl.addStretch()
+            fl.addWidget(lbl_ac)
+            root.addWidget(frm)
+
+        root.addStretch()
+        btn_c = QPushButton("Kapat")
+        btn_c.setFixedSize(80, 32)
+        btn_c.setStyleSheet(
+            f"QPushButton{{background:{C_CARD2};color:{C_MUTED};border:none;"
+            f"border-radius:8px;font-size:12px;padding:0;}}"
+            f"QPushButton:hover{{background:#48484a;color:{C_TEXT};}}")
+        btn_c.clicked.connect(self.close)
+        hbox = QHBoxLayout()
+        hbox.addStretch()
+        hbox.addWidget(btn_c)
+        root.addLayout(hbox)
+
+    @staticmethod
+    def _kriterler(s):
+        rsi     = s.get('rsi', 50)
+        macd_k  = s.get('macd_kesisim', False)
+        kac     = s.get('macd_kesisim_kac_once', 99)
+        macd_y  = s.get('macd_yaklasan', False)
+        hacim   = s.get('hacim')
+        kutu    = s.get('kutu')
+        destek  = s.get('destek_uzeri') and s.get('destek_yakin') and s.get('destek_test')
+        dip     = s.get('dip_sinyal', False)
+        ema     = s.get('ema_sir')
+        trend   = s.get('trend_sinyal', '')
+        rsi_div = s.get('rsi_div')
+        pull    = s.get('ema_pull')
+        bol_sq  = s.get('bol_sq')
+        mum     = s.get('mum')
+        return [
+            ("MACD Kesişim",  macd_k,
+             ("Taze kesişim" if kac == 0 else f"{kac} bar önce") if macd_k else "Kesişim yok"),
+            ("MACD Yaklaşım", macd_y and not macd_k,
+             "Sıfıra yaklaşıyor" if (macd_y and not macd_k) else "—"),
+            ("Hacim Artışı",  hacim is not None,
+             f"{hacim['hacim_orani']:.1f}× ort." if hacim else "Normal hacim"),
+            ("Kutu Kırılımı", kutu is not None,
+             f"%{kutu['aralik_pct']:.1f} aralık" if kutu else "Kutu yok"),
+            ("Destek Bölgesi", bool(destek or dip),
+             "Destekte tutunuyor" if (destek or dip) else "Destek uzağı"),
+            ("EMA Sıralanma", ema is not None,
+             ("Yeni sıralama" if ema and ema.get('yeni') else "Sıralı") if ema else "Sıralama yok"),
+            ("RSI Aşırı Satım", rsi < 35,
+             f"RSI {rsi:.0f}" if rsi < 35 else f"RSI {rsi:.0f} — nötr"),
+            ("Yükselen Trend", trend == 'AL',
+             "Yükselen trend" if trend == 'AL' else "Nötr / düşen trend"),
+            ("RSI Diverjans",  rsi_div is not None,
+             (f"RSI {rsi_div['rsi_dip2']:.0f} vs {rsi_div['rsi_dip1']:.0f}"
+              if rsi_div else "Diverjans yok")),
+            ("EMA21 Pullback", pull is not None,
+             f"EMA21 {pull['ema21']:.2f} (+%{pull['prime_pct']:.1f})" if pull else "Pullback yok"),
+            ("Bollinger Sıkışma", bol_sq is not None,
+             f"%{bol_sq['sikisma_pct']:.0f} sıkışma" if bol_sq else "Sıkışma yok"),
+            ("Mum Formasyonu", mum is not None,
+             (f"{mum['formasyon']}" + (" + destek" if mum and mum.get('destek_yakin') else ""))
+             if mum else "Formasyon yok"),
+        ]
+
+
+# ═══════════════════════════════════════════════════════════
+# KAP Duyuru Diyaloğu
+# ═══════════════════════════════════════════════════════════
+class KapDuyuruDialog(QDialog):
+    def __init__(self, hisse: str, duyurular: list, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"KAP Duyuruları  —  {hisse}")
+        self.resize(700, 460)
+        self.setStyleSheet(f"background:{C_BG}; color:{C_TEXT};")
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 16, 16, 16)
+        root.setSpacing(10)
+
+        lbl = QLabel(f"🏛  {hisse}  —  Son KAP Bildirimleri")
+        lbl.setStyleSheet(f"color:{C_TEXT}; font-size:15px; font-weight:700;")
+        root.addWidget(lbl)
+
+        if not duyurular:
+            lbl_bos = QLabel(
+                "Bildirim bulunamadı veya KAP API erişilemedi.\n"
+                "kap.org.tr adresinden manuel kontrol edebilirsiniz.")
+            lbl_bos.setStyleSheet(f"color:{C_MUTED}; font-size:12px;")
+            lbl_bos.setWordWrap(True)
+            root.addWidget(lbl_bos)
+        else:
+            table = QTableWidget()
+            table.setColumnCount(3)
+            table.setHorizontalHeaderLabels(["Tarih", "Tür", "Başlık"])
+            table.setStyleSheet(_TBL_QSS)
+            table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+            table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+            table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+            table.verticalHeader().setVisible(False)
+            table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+            table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+            table.setRowCount(len(duyurular))
+            for row, d in enumerate(duyurular):
+                items = [
+                    QTableWidgetItem(d.get('tarih', '')),
+                    QTableWidgetItem(d.get('tur', '')),
+                    QTableWidgetItem(d.get('baslik', '')),
+                ]
+                for col, it in enumerate(items):
+                    it.setForeground(QColor(C_MUTED if col < 2 else C_TEXT))
+                    table.setItem(row, col, it)
+                table.setRowHeight(row, 30)
+            root.addWidget(table)
+
+        root.addStretch()
+        btn_c = QPushButton("Kapat")
+        btn_c.setFixedWidth(80)
+        btn_c.setStyleSheet(
+            f"QPushButton{{background:{C_CARD2};color:{C_MUTED};border:none;"
+            f"border-radius:8px;font-size:12px;padding:6px 0;}}"
+            f"QPushButton:hover{{background:#48484a;color:{C_TEXT};}}")
+        btn_c.clicked.connect(self.close)
+        hbox = QHBoxLayout()
+        hbox.addStretch()
+        hbox.addWidget(btn_c)
+        root.addLayout(hbox)
+
+
+# ═══════════════════════════════════════════════════════════
 # Ana Pencere
 # ═══════════════════════════════════════════════════════════
 class AnaPencere(QMainWindow):
@@ -1760,15 +3817,39 @@ class AnaPencere(QMainWindow):
         self._ayar_menu = QMenu(self.btn_ayarlar)
         self._ayar_menu.setStyleSheet(_ALARM_MENU_QSS)
 
+        act_portfoy = QAction("📊   Portföy", self)
+        act_portfoy.triggered.connect(self._portfoy_ac)
+        self._ayar_menu.addAction(act_portfoy)
+
+        self._ayar_menu.addSeparator()
+
         act_alarmlar = QAction("🔔   Alarmlar", self)
         act_alarmlar.triggered.connect(self._alarmlar_ac)
         self._ayar_menu.addAction(act_alarmlar)
+
+        act_telegram = QAction("🤖   Telegram", self)
+        act_telegram.triggered.connect(self._telegram_ac)
+        self._ayar_menu.addAction(act_telegram)
+
+        act_stratejiler = QAction("📖   Strateji Rehberi", self)
+        act_stratejiler.triggered.connect(self._stratejiler_ac)
+        self._ayar_menu.addAction(act_stratejiler)
 
         self._ayar_menu.addSeparator()
 
         act_gecmis = QAction("📋   Sinyal Geçmişi", self)
         act_gecmis.triggered.connect(self._gecmis_ac)
         self._ayar_menu.addAction(act_gecmis)
+
+        act_backtest = QAction("🧪   Backtest", self)
+        act_backtest.triggered.connect(self._backtest_ac)
+        self._ayar_menu.addAction(act_backtest)
+
+        self._ayar_menu.addSeparator()
+
+        act_risk = QAction("⚖   Risk Ayarları", self)
+        act_risk.triggered.connect(self._risk_ayar_menu_ac)
+        self._ayar_menu.addAction(act_risk)
 
         self.btn_ayarlar.setMenu(self._ayar_menu)
         tb.addWidget(self.btn_ayarlar)
@@ -1870,14 +3951,21 @@ class AnaPencere(QMainWindow):
         filtre_bar1.setSpacing(6)
         filtre_bar2 = QHBoxLayout()
         filtre_bar2.setSpacing(6)
+        filtre_bar3 = QHBoxLayout()
+        filtre_bar3.setSpacing(6)
 
         for etiket, kod, bar in [
-            ("Tümü", "TÜM", filtre_bar1),
-            ("AL",   "AL",  filtre_bar1),
-            ("SAT",  "SAT", filtre_bar1),
-            ("MACD", "MACD", filtre_bar2),
-            ("HACİM", "HACİM", filtre_bar2),
-            ("★ Favori", "FAV", filtre_bar2),
+            ("Tümü",    "TÜM",    filtre_bar1),
+            ("AL",      "AL",     filtre_bar1),
+            ("SAT",     "SAT",    filtre_bar1),
+            ("MACD",    "MACD",   filtre_bar2),
+            ("HACİM",   "HACİM",  filtre_bar2),
+            ("★ Favori","FAV",    filtre_bar2),
+            ("KUTU",    "KUTU",   filtre_bar3),
+            ("DESTEK",  "DESTEK", filtre_bar3),
+            ("EMA",     "EMA",    filtre_bar3),
+            ("DIV",     "DIV",    filtre_bar3),
+            ("MUM",     "MUM",    filtre_bar3),
         ]:
             btn = QPushButton(etiket)
             btn.setCheckable(True)
@@ -1890,6 +3978,7 @@ class AnaPencere(QMainWindow):
 
         sol_layout.addLayout(filtre_bar1)
         sol_layout.addLayout(filtre_bar2)
+        sol_layout.addLayout(filtre_bar3)
 
         self.liste = QListWidget()
         self.liste.setSpacing(2)
@@ -1992,6 +4081,22 @@ class AnaPencere(QMainWindow):
             f"<span style='color:{C_GREEN}'>AL: {self._al_n}</span>"
             f"   <span style='color:{C_RED}'>SAT: {self._sat_n}</span>")
 
+        # Telegram: güçlü sinyal bildirimi
+        if (TELEGRAM.aktif and TELEGRAM.guclu_sinyal and
+                sonuc.get('sinyal_gucu', 0) >= TELEGRAM.min_guc and
+                genel not in ('SAT', 'GÜÇLÜ SAT', 'NÖTR')):
+            hisse_t   = sonuc.get('hisse', '')
+            fiyat_t   = sonuc.get('fiyat', 0)
+            periyot_t = PERIYOT_ADLARI.get(sonuc.get('periyot', '1d'), '')
+            skor_t    = sonuc.get('sinyal_gucu', 0)
+            mesaj_t   = (f"📊 <b>{hisse_t}</b>  ·  {genel}  ·  Skor {skor_t}/10\n"
+                         f"💸 ₺{fiyat_t:,.2f}  ·  {periyot_t}")
+            foto = _telegram_grafik_png(sonuc)
+            if foto:
+                TELEGRAM.gonder_foto(mesaj_t, foto)
+            else:
+                TELEGRAM.gonder(mesaj_t)
+
         item, widget = _liste_satiri_olustur(sonuc, pin_cb=lambda h: self._pin_toggle(h))
         hisse = sonuc.get('hisse', '')
         if SABITLENMIS.sabitlenen(hisse):
@@ -2048,23 +4153,21 @@ class AnaPencere(QMainWindow):
         df_gun = sonuc_gun.get('df_grafik')
         if df_g is None or df_gun is None:
             return
-        # df_gun'daki günlük EMA kolonlarını df_g'ye hizala
+        # df_gun'daki günlük EMA kolonlarını df_g'ye hizala (vectorized)
         import pandas as pd, numpy as np
-        def _gun_no(ts):
-            return int(pd.Timestamp(ts).value // (86_400 * 10**9))
-        g_days = [_gun_no(t) for t in df_g.index]
-        e_days = [_gun_no(t) for t in df_gun.index]
-        e_arr  = np.array(e_days)
+        def _to_days(idx):
+            return pd.DatetimeIndex(idx).asi8 // (86_400 * 10**9)
+        g_days = _to_days(df_g.index)
+        e_arr  = _to_days(df_gun.index)
         for p in (5, 8, 13, 21, 50):
             col = f'EMA{p}'
             if col not in df_gun.columns:
                 continue
             e_vals = df_gun[col].values.astype(float)
+            idxs   = np.searchsorted(e_arr, g_days, side='right') - 1
+            valid  = idxs >= 0
             result = np.full(len(df_g), np.nan)
-            for i, gd in enumerate(g_days):
-                idx = int(np.searchsorted(e_arr, gd, side='right')) - 1
-                if idx >= 0:
-                    result[i] = e_vals[idx]
+            result[valid] = e_vals[idxs[valid]]
             df_g[col] = result
         self.detay.grafik.guncelle(
             df_g,
@@ -2079,12 +4182,17 @@ class AnaPencere(QMainWindow):
     def _filtre_btn_stili(aktif: bool, kod: str) -> str:
         if aktif:
             renk_map = {
-                "AL":    (C_GREEN,       "#000000"),
-                "SAT":   (C_RED,         "#ffffff"),
-                "MACD":  ("#0a84ff",     "#ffffff"),
-                "HACİM": ("#ff9f0a",     "#000000"),
-                "FAV":   ("#ffd60a",     "#000000"),
-                "TÜM":   ("#ffffff",     "#000000"),
+                "AL":     (C_GREEN,   "#000000"),
+                "SAT":    (C_RED,     "#ffffff"),
+                "MACD":   ("#0a84ff", "#ffffff"),
+                "HACİM":  ("#ff9f0a", "#000000"),
+                "FAV":    ("#ffd60a", "#000000"),
+                "TÜM":    ("#ffffff", "#000000"),
+                "KUTU":   ("#f59e0b", "#000000"),
+                "DESTEK": ("#34d399", "#000000"),
+                "EMA":    ("#5b9cf6", "#ffffff"),
+                "DIV":    ("#c084fc", "#ffffff"),
+                "MUM":    ("#fb923c", "#000000"),
             }
             bg, fg = renk_map.get(kod, ("#ffffff", "#000000"))
         else:
@@ -2121,17 +4229,30 @@ class AnaPencere(QMainWindow):
             hisse_ad = sonuc.get('hisse', '') if sonuc else ''
             if hisse_ad:
                 taradaki.add(hisse_ad)
-            al_sinyal    = genel in SINYAL_RENK and genel not in ("GÜÇLÜ SAT", "SAT", "NÖTR")
-            sat_sinyal   = genel in ("GÜÇLÜ SAT", "SAT")
-            macd_sinyal  = genel in ("MACD KESİŞİM", "MACD YAKLAŞIM", "DESTEK+MACD", "KUTU+MACD", "HACİM+MACD")
-            hacim_sinyal = genel in ("HACİM KIRILIM", "HACİM+MACD")
-            fav_sinyal   = FAVORILER.favori_mi(hisse_ad)
+            al_sinyal     = genel in SINYAL_RENK and genel not in (
+                "GÜÇLÜ SAT", "SAT", "NÖTR", "MACD ÖLÜ", "DESTEK KIRILDI")
+            sat_sinyal    = genel in ("GÜÇLÜ SAT", "SAT", "MACD ÖLÜ", "DESTEK KIRILDI")
+            macd_sinyal   = genel in (
+                "MACD KESİŞİM", "MACD YAKLAŞIM", "DESTEK+MACD", "KUTU+MACD",
+                "HACİM+MACD", "EMA+MACD", "DIV+MACD")
+            hacim_sinyal  = genel in ("HACİM KIRILIM", "HACİM+MACD")
+            kutu_sinyal   = genel in ("KUTU AL", "KUTU+MACD")
+            destek_sinyal = genel in ("DESTEK AL", "DESTEK+MACD")
+            ema_sinyal    = genel in ("EMA SIRALANMA", "EMA PULLBACK", "EMA+MACD")
+            div_sinyal    = genel in ("RSI DİVERJANS", "DIV+MACD")
+            mum_sinyal    = genel in ("ÇEKİÇ/YUTAN",)
+            fav_sinyal    = FAVORILER.favori_mi(hisse_ad)
             goster = (self._filtre_aktif == "TÜM" or
-                      (self._filtre_aktif == "AL"     and al_sinyal) or
-                      (self._filtre_aktif == "SAT"    and sat_sinyal) or
-                      (self._filtre_aktif == "MACD"   and macd_sinyal) or
-                      (self._filtre_aktif == "HACİM"  and hacim_sinyal) or
-                      (self._filtre_aktif == "FAV"    and fav_sinyal))
+                      (self._filtre_aktif == "AL"      and al_sinyal) or
+                      (self._filtre_aktif == "SAT"     and sat_sinyal) or
+                      (self._filtre_aktif == "MACD"    and macd_sinyal) or
+                      (self._filtre_aktif == "HACİM"   and hacim_sinyal) or
+                      (self._filtre_aktif == "KUTU"    and kutu_sinyal) or
+                      (self._filtre_aktif == "DESTEK"  and destek_sinyal) or
+                      (self._filtre_aktif == "EMA"     and ema_sinyal) or
+                      (self._filtre_aktif == "DIV"     and div_sinyal) or
+                      (self._filtre_aktif == "MUM"     and mum_sinyal) or
+                      (self._filtre_aktif == "FAV"     and fav_sinyal))
             item.setHidden(not goster)
 
         # 3. FAV filtresi aktifse — taramada olmayan favorileri listele
@@ -2186,6 +4307,28 @@ class AnaPencere(QMainWindow):
         dlg = AlarmYonetimDialog(self)
         dlg.exec()
 
+    def _portfoy_ac(self):
+        dlg = PortfoyDialog(self)
+        dlg.exec()
+
+    def _telegram_ac(self):
+        dlg = TelegramAyarDialog(self)
+        dlg.exec()
+
+    def _stratejiler_ac(self):
+        dlg = StratejilerDialog(self)
+        dlg.exec()
+
+    def _backtest_ac(self):
+        hisse = ''
+        if self.detay._sonuc:
+            hisse = self.detay._sonuc.get('hisse', '')
+        dlg = BacktestDialog(self, hisse=hisse)
+        dlg.exec()
+
+    def _risk_ayar_menu_ac(self):
+        RiskAyarDialog(self).exec()
+
     def _alarm_bildir(self, hisse: str, hedef: float, guncel: float):
         try:
             winsound.Beep(1200, 180)
@@ -2201,6 +4344,9 @@ class AnaPencere(QMainWindow):
         ALARMLAR.kaldir(hisse)
         self.statusBar().showMessage(
             f"Alarm tetiklendi: {hisse} → ₺{guncel:.2f}  (hedef ₺{hedef:.2f})")
+        TELEGRAM.gonder(
+            f"🔔 <b>Fiyat Alarmı: {hisse}</b>\n"
+            f"Hedef ₺{hedef:.2f} aşıldı — güncel ₺{guncel:.2f}")
 
     def _hisse_ara(self):
         giriş = self.txt_hisse.text().strip().upper()

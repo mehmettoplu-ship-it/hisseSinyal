@@ -17,6 +17,11 @@ favoriler.json.bak
 favoriler.json.tmp
 sabitlenmis.json
 sinyal_gecmisi.json
+portfoy.json
+portfoy.json.tmp
+telegram_ayar.json
+risk_ayar.json
+backtest_sonuclari.json
 
 # Görsel / test dosyaları
 1.png
