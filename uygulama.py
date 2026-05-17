@@ -3991,6 +3991,7 @@ class AnaPencere(QMainWindow):
             ("SAT",     "SAT",    filtre_bar1),
             ("MACD",    "MACD",   filtre_bar2),
             ("HACİM",   "HACİM",  filtre_bar2),
+            ("⚡ 7+",   "GUCLU",  filtre_bar2),
             ("★ Favori","FAV",    filtre_bar2),
             ("KUTU",    "KUTU",   filtre_bar3),
             ("DESTEK",  "DESTEK", filtre_bar3),
@@ -4227,6 +4228,7 @@ class AnaPencere(QMainWindow):
                 "EMA":    ("#5b9cf6", "#ffffff"),
                 "DIV":    ("#c084fc", "#ffffff"),
                 "MUM":    ("#fb923c", "#000000"),
+                "GUCLU":  ("#ffd60a", "#000000"),
             }
             bg, fg = renk_map.get(kod, ("#ffffff", "#000000"))
         else:
@@ -4275,12 +4277,14 @@ class AnaPencere(QMainWindow):
             ema_sinyal    = genel in ("EMA SIRALANMA", "EMA PULLBACK", "EMA+MACD")
             div_sinyal    = genel in ("RSI DİVERJANS", "DIV+MACD")
             mum_sinyal    = genel in ("ÇEKİÇ/YUTAN",)
+            guclu_sinyal  = (sonuc.get('sinyal_gucu', 0) >= 7) if sonuc else False
             fav_sinyal    = FAVORILER.favori_mi(hisse_ad)
             goster = (self._filtre_aktif == "TÜM" or
                       (self._filtre_aktif == "AL"      and al_sinyal) or
                       (self._filtre_aktif == "SAT"     and sat_sinyal) or
                       (self._filtre_aktif == "MACD"    and macd_sinyal) or
                       (self._filtre_aktif == "HACİM"   and hacim_sinyal) or
+                      (self._filtre_aktif == "GUCLU"   and guclu_sinyal) or
                       (self._filtre_aktif == "KUTU"    and kutu_sinyal) or
                       (self._filtre_aktif == "DESTEK"  and destek_sinyal) or
                       (self._filtre_aktif == "EMA"     and ema_sinyal) or
