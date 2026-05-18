@@ -1975,7 +1975,7 @@ class TaramaThread(QThread):
         self._dur = True
 
     def run(self):
-        gun_sayilari = {"1h": 3, "4h": 18, "1d": 3, "1w": 3}
+        gun_sayilari = {"1h": 3, "4h": 18, "1d": 3, "1w": 3, "1mo": 3}
         al_n = sat_n = 0
         toplam = len(self.hisseler) * len(self.periyotlar)
         say = 0
@@ -3781,11 +3781,17 @@ class AnaPencere(QMainWindow):
         tb.setContentsMargins(20, 0, 20, 0)
         tb.setSpacing(10)
 
-        lbl_logo = QLabel("BIST Sinyal")
-        lbl_logo.setStyleSheet(
-            f"color:{C_TEXT}; font-size:17px; font-weight:700; letter-spacing:-0.3px;")
+        lbl_logo = QLabel(
+            f'<span style="color:{C_BLUE};font-weight:700;">BIST</span>'
+            f'<span style="color:{C_TEXT};font-weight:700;"> Sinyal</span>'
+        )
+        lbl_logo.setStyleSheet("font-size:17px; letter-spacing:-0.3px;")
         tb.addWidget(lbl_logo)
-        tb.addSpacing(4)
+        _vsep = QWidget()
+        _vsep.setFixedSize(1, 20)
+        _vsep.setStyleSheet(f"background:{C_BORDER};")
+        tb.addWidget(_vsep)
+        tb.addSpacing(6)
 
         # Periyot — segmented control görünümü
         seg_bg = QWidget()
@@ -3797,7 +3803,7 @@ class AnaPencere(QMainWindow):
         seg_lay.setSpacing(2)
 
         self._periyot_butonlar = {}
-        _PER_BTN = [("1S", "1h"), ("4S", "4h"), ("Gün", "1d"), ("Haf", "1w")]
+        _PER_BTN = [("1S", "1h"), ("4S", "4h"), ("Gün", "1d"), ("Haf", "1w"), ("Ay", "1mo")]
         _PER_VARSAYILAN = {"4h", "1d"}
         for etiket, kod in _PER_BTN:
             btn = QPushButton(etiket)
@@ -4391,7 +4397,7 @@ class AnaPencere(QMainWindow):
         if not giriş:
             return
         periyotlar = self._secilen_periyotlar()
-        gun_sayilari = {"1h": 3, "4h": 18, "1d": 3, "1w": 3}
+        gun_sayilari = {"1h": 3, "4h": 18, "1d": 3, "1w": 3, "1mo": 3}
         for periyot in periyotlar:
             df = veri_cek(giriş, periyot)
             if df is None:
