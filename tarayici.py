@@ -524,6 +524,7 @@ def veri_cek(hisse_kodu, periyot_tipi="1d"):
         if df is None or df.empty:
             return None
         df = _sutunlari_duzenle(df)
+        df = df.dropna(subset=['Open', 'High', 'Low', 'Close'])
         return df if len(df) >= 30 else None
     except Exception:
         return None

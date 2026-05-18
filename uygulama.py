@@ -886,7 +886,7 @@ def _telegram_grafik_png(sonuc: dict) -> bytes | None:
         for iv,v,rk in vol_data:
             ax_vol.add_patch(mpatches.Rectangle((iv-0.38,0),0.76,v,
                 linewidth=0, facecolor=rk, alpha=0.45, zorder=2))
-        ax_vol.set_ylim(0, max_v*1.35); ax_vol.set_xlim(-0.8, n-0.2)
+        ax_vol.set_ylim(0, max_v*1.35); ax_vol.set_xlim(-0.8, n+4)
         ax_vol.yaxis.set_major_locator(mticker.MaxNLocator(2, integer=False))
         ax_vol.yaxis.set_major_formatter(
             mticker.FuncFormatter(lambda x,_: f"{x/1e6:.1f}M" if x>=1e6 else f"{x/1e3:.0f}K"))
@@ -900,7 +900,7 @@ def _telegram_grafik_png(sonuc: dict) -> bytes | None:
     if kutu: lvls += [kutu['destek'], kutu['direnc']]
     y_lo = min(pmin-pad, (min(lvls)-pad*0.5) if lvls else pmin-pad)
     y_hi = max(pmax+pad*3.0, (max(lvls)+pad) if lvls else pmax+pad)
-    ax.set_xlim(-0.8, n-0.2); ax.set_ylim(y_lo, y_hi)
+    ax.set_xlim(-0.8, n+4); ax.set_ylim(y_lo, y_hi)
 
     def _frac(price): return (price - y_lo) / (y_hi - y_lo)
 
@@ -1147,7 +1147,7 @@ class GrafikWidget(FigureCanvas):
                     linewidth=0, facecolor=rk, alpha=0.45, zorder=2
                 ))
             ax_vol.set_ylim(0, max_v * 1.35)
-            ax_vol.set_xlim(-0.8, n - 0.2)
+            ax_vol.set_xlim(-0.8, n + 4)
             ax_vol.yaxis.set_major_locator(mticker.MaxNLocator(2, integer=False))
             ax_vol.yaxis.set_major_formatter(
                 mticker.FuncFormatter(
@@ -1175,7 +1175,7 @@ class GrafikWidget(FigureCanvas):
             lvls += [kutu['destek'], kutu['direnc']]
         y_lo = min(pmin - pad, (min(lvls) - pad * 0.5) if lvls else pmin - pad)
         y_hi = max(pmax + pad * 3.0, (max(lvls) + pad) if lvls else pmax + pad)
-        ax.set_xlim(-0.8, n - 0.2)
+        ax.set_xlim(-0.8, n + 4)
         ax.set_ylim(y_lo, y_hi)
 
         def _frac(price):
@@ -1510,9 +1510,8 @@ class DetayPanel(QWidget):
         alt_layout.addWidget(seg)
         root.addLayout(alt_layout)
 
-        # ── Göstergeler Grid (2×3) ────────────
+        # Kartlar ve özet: gizli tutulur (guncelle metodu hâlâ günceller ama gösterilmez)
         self.grid = QGridLayout()
-        self.grid.setSpacing(10)
         self.kartlar = {}
         pozisyonlar = {
             'rsi':        (0, 0, "RSI"),
@@ -1526,27 +1525,11 @@ class DetayPanel(QWidget):
             kart = GostergekKart(baslik, "—", "NÖTR", "—")
             self.kartlar[anahtar] = kart
             self.grid.addWidget(kart, satir, sutun)
-        root.addLayout(self.grid)
-
-        # ── Teknik Özet Satırı ────────────────
-        ozet_frame = QFrame()
-        ozet_frame.setFixedHeight(34)
-        ozet_frame.setStyleSheet(f"background:{C_CARD}; border-radius:10px; border:none;")
-        ozet_lay = QHBoxLayout(ozet_frame)
-        ozet_lay.setContentsMargins(10, 4, 10, 4)
-        ozet_lay.setSpacing(6)
-        self._ozet_rsi  = QLabel("RSI: —")
-        self._ozet_macd = QLabel("MACD: —")
-        self._ozet_ema  = QLabel("EMA: —")
-        self._ozet_vol  = QLabel("Vol: —")
-        _pill_base = (f"color:{C_MUTED}; font-size:11px; font-weight:600; "
-                      f"background:{C_CARD2}; border-radius:6px; padding:2px 9px; border:none;")
-        for lbl in (self._ozet_rsi, self._ozet_macd, self._ozet_ema, self._ozet_vol):
-            lbl.setStyleSheet(_pill_base)
-            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            ozet_lay.addWidget(lbl)
-        ozet_lay.addStretch()
-        root.addWidget(ozet_frame)
+        # grid layoutu ana layout'a eklenmedi → gösterilmez, grafik daha büyük
+        self._ozet_rsi  = QLabel()
+        self._ozet_macd = QLabel()
+        self._ozet_ema  = QLabel()
+        self._ozet_vol  = QLabel()
 
         # ── Skor Kırılımı ────────────────────
         skor_frame = QFrame()
