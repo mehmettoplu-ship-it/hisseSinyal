@@ -918,23 +918,48 @@ def _telegram_grafik_png(sonuc: dict) -> bytes | None:
             frac = conflict - _MIN_GAP if frac < conflict else conflict + _MIN_GAP
         _lbls.append((max(0.02, min(0.97, frac)), metin, renk, badge_fc, kalin))
 
+    _low_vals  = df_g['Low'].values.astype(float)  if df_g is not None else np.array([])
+    _high_vals = df_g['High'].values.astype(float) if df_g is not None else np.array([])
+
     for idx, d in enumerate(destekler):
-        guc = 1.0-idx*0.20; lw = 1.6-idx*0.3
-        mesafe = (son_k-d)/son_k*100 if son_k > 0 else 0
-        ax.axhline(d, color=C_DESTEK, lw=lw*5, alpha=0.05, zorder=3)
-        ax.axhline(d, color=C_DESTEK, lw=lw, linestyle='--', alpha=guc*0.9, zorder=5)
-        ax.axhspan(d*0.995, d*1.005, alpha=max(0.02,0.07-idx*0.02), color=C_DESTEK, zorder=1)
-        ax.plot(n-1, d, 'o', color=C_DESTEK, ms=4.5-idx*0.5, alpha=guc*0.9, zorder=7)
-        _etiket_ekle(_frac(d), f" D{idx+1}  {d:.2f}  ↓{mesafe:.1f}% ", C_DESTEK, BG_CHART)
+        guc  = 1.0 - idx * 0.20
+        lw   = 1.8 - idx * 0.3
+        mesafe = (son_k - d) / son_k * 100 if son_k > 0 else 0
+        stil = '-' if idx == 0 else '--'
+        test_n = int(np.sum(np.abs(_low_vals - d) / (d + 1e-10) < 0.020)) if len(_low_vals) else 0
+        ax.axhspan(d*0.978, d*1.022, alpha=max(0.01, 0.025-idx*0.007), color=C_DESTEK, zorder=1)
+        ax.axhspan(d*0.989, d*1.011, alpha=max(0.02, 0.050-idx*0.012), color=C_DESTEK, zorder=1)
+        ax.axhspan(d*0.996, d*1.004, alpha=max(0.04, 0.110-idx*0.025), color=C_DESTEK, zorder=2)
+        ax.axhline(d, color=C_DESTEK, lw=lw*5, alpha=0.04*guc, zorder=3)
+        ax.axhline(d, color=C_DESTEK, lw=lw, linestyle=stil, alpha=guc*0.92, zorder=5)
+        if len(_low_vals):
+            touch_idx = np.where(np.abs(_low_vals - d) / (d + 1e-10) < 0.018)[0]
+            for ti in touch_idx:
+                ax.plot(ti, _low_vals[ti], 'v', color=C_DESTEK,
+                        ms=4.0, alpha=0.70*guc, zorder=7, markeredgewidth=0)
+        ax.plot(n-1, d, 'o', color=C_DESTEK, ms=4.5-idx*0.5, alpha=guc*0.9, zorder=8)
+        test_str = f" {test_n}×" if test_n >= 2 else ""
+        _etiket_ekle(_frac(d), f" D{idx+1}  {d:.2f}  ↓{mesafe:.1f}%{test_str} ", C_DESTEK, BG_CHART)
 
     for idx, rv in enumerate(direncler):
-        guc = 1.0-idx*0.20; lw = 1.6-idx*0.3
-        mesafe = (rv-son_k)/son_k*100 if son_k > 0 else 0
-        ax.axhline(rv, color=C_DIRENC, lw=lw*5, alpha=0.05, zorder=3)
-        ax.axhline(rv, color=C_DIRENC, lw=lw, linestyle='--', alpha=guc*0.9, zorder=5)
-        ax.axhspan(rv*0.995, rv*1.005, alpha=max(0.02,0.07-idx*0.02), color=C_DIRENC, zorder=1)
-        ax.plot(n-1, rv, 'o', color=C_DIRENC, ms=4.5-idx*0.5, alpha=guc*0.9, zorder=7)
-        _etiket_ekle(_frac(rv), f" R{idx+1}  {rv:.2f}  ↑{mesafe:.1f}% ", C_DIRENC, BG_CHART)
+        guc  = 1.0 - idx * 0.20
+        lw   = 1.8 - idx * 0.3
+        mesafe = (rv - son_k) / son_k * 100 if son_k > 0 else 0
+        stil = '-' if idx == 0 else '--'
+        test_n = int(np.sum(np.abs(_high_vals - rv) / (rv + 1e-10) < 0.020)) if len(_high_vals) else 0
+        ax.axhspan(rv*0.978, rv*1.022, alpha=max(0.01, 0.025-idx*0.007), color=C_DIRENC, zorder=1)
+        ax.axhspan(rv*0.989, rv*1.011, alpha=max(0.02, 0.050-idx*0.012), color=C_DIRENC, zorder=1)
+        ax.axhspan(rv*0.996, rv*1.004, alpha=max(0.04, 0.110-idx*0.025), color=C_DIRENC, zorder=2)
+        ax.axhline(rv, color=C_DIRENC, lw=lw*5, alpha=0.04*guc, zorder=3)
+        ax.axhline(rv, color=C_DIRENC, lw=lw, linestyle=stil, alpha=guc*0.92, zorder=5)
+        if len(_high_vals):
+            touch_idx = np.where(np.abs(_high_vals - rv) / (rv + 1e-10) < 0.018)[0]
+            for ti in touch_idx:
+                ax.plot(ti, _high_vals[ti], '^', color=C_DIRENC,
+                        ms=4.0, alpha=0.70*guc, zorder=7, markeredgewidth=0)
+        ax.plot(n-1, rv, 'o', color=C_DIRENC, ms=4.5-idx*0.5, alpha=guc*0.9, zorder=8)
+        test_str = f" {test_n}×" if test_n >= 2 else ""
+        _etiket_ekle(_frac(rv), f" R{idx+1}  {rv:.2f}  ↑{mesafe:.1f}%{test_str} ", C_DIRENC, BG_CHART)
 
     if kutu:
         k_d=kutu['destek']; k_r=kutu['direnc']
@@ -1177,39 +1202,72 @@ class GrafikWidget(FigureCanvas):
             _lbls.append((max(0.02, min(0.97, frac)), metin, renk, badge_fc, kalin))
 
         # ── Destek çizgileri ──────────────────────────
+        _low_vals  = df_g['Low'].values.astype(float)  if df_g is not None else np.array([])
+        _high_vals = df_g['High'].values.astype(float) if df_g is not None else np.array([])
+
         for idx, d in enumerate(destekler):
-            guc = 1.0 - idx * 0.20
-            lw  = 1.6 - idx * 0.3
+            guc    = 1.0 - idx * 0.20
+            lw     = 1.8 - idx * 0.3
             mesafe = (son_k - d) / son_k * 100 if son_k > 0 else 0
-            # Glow + dashed çizgi
-            ax.axhline(d, color=self.C_DESTEK, lw=lw * 5, alpha=0.05, zorder=3)
-            ax.axhline(d, color=self.C_DESTEK, lw=lw,
-                       linestyle='--', alpha=guc * 0.9, zorder=5)
-            # Bölge gölgesi ±%0.5
-            ax.axhspan(d * 0.995, d * 1.005,
-                       alpha=max(0.02, 0.07 - idx * 0.02),
-                       color=self.C_DESTEK, zorder=1)
-            ax.plot(n - 1, d, 'o', color=self.C_DESTEK,
-                    ms=4.5 - idx * 0.5, alpha=guc * 0.9, zorder=7)
+            stil   = '-' if idx == 0 else '--'
+
+            # Test sayısı — Low'ların ±%2 yakınındaki bar sayısı
+            test_n = int(np.sum(np.abs(_low_vals - d) / (d + 1e-10) < 0.020)) if len(_low_vals) else 0
+
+            # Gradient zone: 3 katman (geniş halo → dar yoğun)
+            ax.axhspan(d*0.978, d*1.022, alpha=max(0.01, 0.025-idx*0.007), color=self.C_DESTEK, zorder=1)
+            ax.axhspan(d*0.989, d*1.011, alpha=max(0.02, 0.050-idx*0.012), color=self.C_DESTEK, zorder=1)
+            ax.axhspan(d*0.996, d*1.004, alpha=max(0.04, 0.110-idx*0.025), color=self.C_DESTEK, zorder=2)
+
+            # Glow + çizgi (D1 solid, D2+ dashed)
+            ax.axhline(d, color=self.C_DESTEK, lw=lw*5, alpha=0.04*guc, zorder=3)
+            ax.axhline(d, color=self.C_DESTEK, lw=lw, linestyle=stil, alpha=guc*0.92, zorder=5)
+
+            # Test noktaları: destek bölgesine dokunan Low barlarına ▼
+            if len(_low_vals):
+                touch_idx = np.where(np.abs(_low_vals - d) / (d + 1e-10) < 0.018)[0]
+                for ti in touch_idx:
+                    ax.plot(ti, _low_vals[ti], 'v', color=self.C_DESTEK,
+                            ms=4.0, alpha=0.70*guc, zorder=7, markeredgewidth=0)
+
+            # Son bar nokta
+            ax.plot(n-1, d, 'o', color=self.C_DESTEK, ms=4.5-idx*0.5, alpha=guc*0.9, zorder=8)
+
+            test_str = f" {test_n}×" if test_n >= 2 else ""
             _etiket_ekle(_frac(d),
-                         f" D{idx+1}  {d:.2f}  ↓{mesafe:.1f}% ",
+                         f" D{idx+1}  {d:.2f}  ↓{mesafe:.1f}%{test_str} ",
                          self.C_DESTEK, self.BG_CHART)
 
         # ── Direnç çizgileri ─────────────────────────
         for idx, rv in enumerate(direncler):
-            guc = 1.0 - idx * 0.20
-            lw  = 1.6 - idx * 0.3
+            guc    = 1.0 - idx * 0.20
+            lw     = 1.8 - idx * 0.3
             mesafe = (rv - son_k) / son_k * 100 if son_k > 0 else 0
-            ax.axhline(rv, color=self.C_DIRENC, lw=lw * 5, alpha=0.05, zorder=3)
-            ax.axhline(rv, color=self.C_DIRENC, lw=lw,
-                       linestyle='--', alpha=guc * 0.9, zorder=5)
-            ax.axhspan(rv * 0.995, rv * 1.005,
-                       alpha=max(0.02, 0.07 - idx * 0.02),
-                       color=self.C_DIRENC, zorder=1)
-            ax.plot(n - 1, rv, 'o', color=self.C_DIRENC,
-                    ms=4.5 - idx * 0.5, alpha=guc * 0.9, zorder=7)
+            stil   = '-' if idx == 0 else '--'
+
+            test_n = int(np.sum(np.abs(_high_vals - rv) / (rv + 1e-10) < 0.020)) if len(_high_vals) else 0
+
+            # Gradient zone
+            ax.axhspan(rv*0.978, rv*1.022, alpha=max(0.01, 0.025-idx*0.007), color=self.C_DIRENC, zorder=1)
+            ax.axhspan(rv*0.989, rv*1.011, alpha=max(0.02, 0.050-idx*0.012), color=self.C_DIRENC, zorder=1)
+            ax.axhspan(rv*0.996, rv*1.004, alpha=max(0.04, 0.110-idx*0.025), color=self.C_DIRENC, zorder=2)
+
+            # Glow + çizgi
+            ax.axhline(rv, color=self.C_DIRENC, lw=lw*5, alpha=0.04*guc, zorder=3)
+            ax.axhline(rv, color=self.C_DIRENC, lw=lw, linestyle=stil, alpha=guc*0.92, zorder=5)
+
+            # Test noktaları: dirençe dokunan High barlarına ▲
+            if len(_high_vals):
+                touch_idx = np.where(np.abs(_high_vals - rv) / (rv + 1e-10) < 0.018)[0]
+                for ti in touch_idx:
+                    ax.plot(ti, _high_vals[ti], '^', color=self.C_DIRENC,
+                            ms=4.0, alpha=0.70*guc, zorder=7, markeredgewidth=0)
+
+            ax.plot(n-1, rv, 'o', color=self.C_DIRENC, ms=4.5-idx*0.5, alpha=guc*0.9, zorder=8)
+
+            test_str = f" {test_n}×" if test_n >= 2 else ""
             _etiket_ekle(_frac(rv),
-                         f" R{idx+1}  {rv:.2f}  ↑{mesafe:.1f}% ",
+                         f" R{idx+1}  {rv:.2f}  ↑{mesafe:.1f}%{test_str} ",
                          self.C_DIRENC, self.BG_CHART)
 
         # ── Kutu konsolidasyon ────────────────────────
