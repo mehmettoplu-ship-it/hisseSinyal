@@ -226,7 +226,7 @@ def ema_siralanma_bul(close, max_prime_pct=8.0, _emas=None):
 # Konsolidasyon Kutusu Tespiti
 # ────────────────────────────────────────────
 
-def kutu_konsolidasyon_bul(df, gun_sayisi=30, maks_aralik_pct=0.10, min_dokunma=2):
+def kutu_konsolidasyon_bul(df, gun_sayisi=50, maks_aralik_pct=0.10, min_dokunma=2):
     """
     Yatay konsolidasyon kutusu + çoklu destek testi arar.
 

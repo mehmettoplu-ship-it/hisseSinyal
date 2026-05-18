@@ -957,14 +957,13 @@ def _telegram_grafik_png(sonuc: dict) -> bytes | None:
 
     if kutu:
         k_d=kutu['destek']; k_r=kutu['direnc']
-        k_pct=kutu['aralik_pct']; k_doc=kutu.get('dokunma',0); k_bar=kutu.get('gun_sayisi',30)
-        x0=max(0,n-k_bar-1); xs=list(range(x0,n))
-        ax.fill_between(xs, k_d, k_r, alpha=0.11, color=C_KUTU, zorder=1)
-        ax.plot([x0,x0],[k_d,k_r], color=C_KUTU, lw=0.7, alpha=0.35, zorder=4)
-        ax.plot([x0,n-0.2],[k_d,k_d], color=C_KUTU, lw=2.0, alpha=0.90, zorder=6)
-        ax.axhline(k_d, color=C_KUTU, lw=6, alpha=0.05, zorder=3)
-        ax.plot([x0,n-0.2],[k_r,k_r], color=C_KUTU, lw=1.4, linestyle='--', alpha=0.85, zorder=6)
-        ax.axhline(k_r, color=C_KUTU, lw=6, alpha=0.05, zorder=3)
+        k_pct=kutu['aralik_pct']; k_doc=kutu.get('dokunma',0); k_bar=kutu.get('gun_sayisi',50)
+        x0=max(0, n-k_bar-1-k_bar//5); xs=list(range(x0,n))
+        ax.fill_between(xs, k_d, k_r, alpha=0.13, color=C_KUTU, zorder=1)
+        x_start=max(0,n-k_bar-1)
+        ax.plot([x_start,x_start],[k_d,k_r], color=C_KUTU, lw=1.0, alpha=0.45, zorder=4)
+        ax.plot([x0,n+3],[k_d,k_d], color=C_KUTU, lw=2.0, alpha=0.88, zorder=6)
+        ax.plot([x0,n+3],[k_r,k_r], color=C_KUTU, lw=1.4, linestyle='--', alpha=0.82, zorder=6)
         _etiket_ekle(_frac(k_r), f" KUTU ▸ {k_r:.2f}  %{k_pct} ", C_KUTU, "#2d1e00")
         _etiket_ekle(_frac(k_d), f" KUTU ▸ {k_d:.2f}  {k_doc}x ", C_KUTU, "#2d1e00")
 
@@ -1251,24 +1250,23 @@ class GrafikWidget(FigureCanvas):
             k_r   = kutu['direnc']
             k_pct = kutu['aralik_pct']
             k_doc = kutu.get('dokunma', 0)
-            k_bar = kutu.get('gun_sayisi', 30)
-            x0    = max(0, n - k_bar - 1)
+            k_bar = kutu.get('gun_sayisi', 50)
+            # Konsolidasyon başlangıcı; sola biraz bağlam ekle
+            x0    = max(0, n - k_bar - 1 - k_bar // 5)
 
-            # Dolu alan — kutu barları boyunca x-kısıtlı
             xs = list(range(x0, n))
             ax.fill_between(xs, k_d, k_r,
-                            alpha=0.11, color=self.C_KUTU, zorder=1)
-            # Sol kenar
-            ax.plot([x0, x0], [k_d, k_r],
-                    color=self.C_KUTU, lw=0.7, alpha=0.35, zorder=4)
-            # Alt çizgi (destek) — solid
-            ax.plot([x0, n - 0.2], [k_d, k_d],
-                    color=self.C_KUTU, lw=2.0, alpha=0.90, zorder=6)
-            ax.axhline(k_d, color=self.C_KUTU, lw=6, alpha=0.05, zorder=3)
-            # Üst çizgi (hedef/kırılım) — dashed
-            ax.plot([x0, n - 0.2], [k_r, k_r],
-                    color=self.C_KUTU, lw=1.4, linestyle='--', alpha=0.85, zorder=6)
-            ax.axhline(k_r, color=self.C_KUTU, lw=6, alpha=0.05, zorder=3)
+                            alpha=0.13, color=self.C_KUTU, zorder=1)
+            # Sol kenar — konsolidasyon başlangıcını işaret eder
+            x_start = max(0, n - k_bar - 1)
+            ax.plot([x_start, x_start], [k_d, k_r],
+                    color=self.C_KUTU, lw=1.0, alpha=0.45, zorder=4)
+            # Alt çizgi (destek) — solid, tam genişlik
+            ax.plot([x0, n + 3], [k_d, k_d],
+                    color=self.C_KUTU, lw=2.0, alpha=0.88, zorder=6)
+            # Üst çizgi (hedef/kırılım) — dashed, tam genişlik
+            ax.plot([x0, n + 3], [k_r, k_r],
+                    color=self.C_KUTU, lw=1.4, linestyle='--', alpha=0.82, zorder=6)
             _etiket_ekle(_frac(k_r),
                          f" KUTU ▸ {k_r:.2f}  %{k_pct} ",
                          self.C_KUTU, "#2d1e00")
