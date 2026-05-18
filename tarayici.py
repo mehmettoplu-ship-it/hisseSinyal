@@ -498,10 +498,10 @@ def veri_cek(hisse_kodu, periyot_tipi="1d"):
     ticker = f"{hisse_kodu}.IS"
     try:
         if periyot_tipi == "1h":
-            df = yf.download(ticker, period="7d",  interval="1h",
+            df = yf.download(ticker, period="30d", interval="1h",
                              auto_adjust=True, progress=False)
         elif periyot_tipi == "4h":
-            df = yf.download(ticker, period="60d", interval="1h",
+            df = yf.download(ticker, period="90d", interval="1h",
                              auto_adjust=True, progress=False)
             if df is not None and not df.empty:
                 df = _sutunlari_duzenle(df)
@@ -518,7 +518,7 @@ def veri_cek(hisse_kodu, periyot_tipi="1d"):
             df = yf.download(ticker, period="10y", interval="1mo",
                              auto_adjust=True, progress=False)
         else:  # "1d"
-            df = yf.download(ticker, period="1y",  interval="1d",
+            df = yf.download(ticker, period="2y",  interval="1d",
                              auto_adjust=True, progress=False)
 
         if df is None or df.empty:
@@ -529,7 +529,7 @@ def veri_cek(hisse_kodu, periyot_tipi="1d"):
         return None
 
 
-_PERIOD_MAP = {"1h": ("7d", "1h"), "4h": ("60d", "1h"), "1w": ("3y", "1wk"), "1d": ("1y", "1d"), "1mo": ("10y", "1mo")}
+_PERIOD_MAP = {"1h": ("30d", "1h"), "4h": ("90d", "1h"), "1w": ("3y", "1wk"), "1d": ("2y", "1d"), "1mo": ("10y", "1mo")}
 
 def veri_cek_toplu(hisseler: list, periyot_tipi: str) -> dict:
     """Tüm hisseleri tek yf.download çağrısıyla çeker. {hisse: df} döner."""
@@ -948,19 +948,20 @@ def sinyal_hesapla(df, periyot_tipi="1d", destek_gun_sayisi=3, close_gunluk=None
     else:
         r['genel_sinyal'] = "NÖTR"
 
-    # ── Grafik verisi (son 80 mum + EMA + MACD + RSI) ──────
+    # ── Grafik verisi (periyoda göre mum sayısı + EMA + MACD + RSI) ──────
     # grafik=False → BacktestThread'de atlanır (~9 EWM hesabı tasarruf)
     if grafik:
-        df_g = df.tail(80).copy()
+        _N = {"1h": 120, "4h": 120, "1d": 150, "1w": 100, "1mo": 80}.get(periyot_tipi, 120)
+        df_g = df.tail(_N).copy()
         if periyot_tipi == "1d" or close_gunluk is None:
             for p in (5, 8, 13, 21, 50):
-                df_g[f'EMA{p}'] = _emas[p].tail(80).values   # önbellekten al
+                df_g[f'EMA{p}'] = _emas[p].tail(_N).values
         else:
-            _hizala_gunluk_ema(df_g, close_gunluk)           # _emas burada kullanılmaz
-        df_g['RSI']       = rsi_seri.tail(80).values         # önbellekten al
-        df_g['MACD_LINE'] = macd_line.tail(80).values        # önbellekten al
-        df_g['MACD_SIG']  = macd_sig.tail(80).values
-        df_g['MACD_HIST'] = hist.tail(80).values
+            _hizala_gunluk_ema(df_g, close_gunluk)
+        df_g['RSI']       = rsi_seri.tail(_N).values
+        df_g['MACD_LINE'] = macd_line.tail(_N).values
+        df_g['MACD_SIG']  = macd_sig.tail(_N).values
+        df_g['MACD_HIST'] = hist.tail(_N).values
         r['df_grafik'] = df_g
 
     r['sinyal_gucu'] = sinyal_gucu_hesapla(r)
