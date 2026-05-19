@@ -428,57 +428,224 @@ def bollinger_squeeze_bul(close, min_lookback=60):
 
 def mum_formasyonu_bul(df, destekler=None):
     """
-    Son barda çekiç (hammer) veya yutan mum (bullish engulfing) arar.
-    Destek bölgesinde oluşursa guclu=True döner.
+    Bullish mum formasyonu arar.
+
+    Bar indeksleme:
+      1-2 bar formasyonlar → sinyal: bar[-2], onay: bar[-1]
+      3 bar formasyonlar   → ilk: bar[-3], orta: bar[-2], son: bar[-1]  (son bar tamamlayıcı)
+
+    Filtreler: ATR tabanlı min gövde + 5-7 bar düşüş trendi + hacim kontrolü
     """
-    if len(df) < 3:
+    if len(df) < 8:
         return None
 
-    son  = df.iloc[-1]
-    prev = df.iloc[-2]
+    def _ohlc(row):
+        return (float(row['Open']), float(row['High']),
+                float(row['Low']),  float(row['Close']))
 
-    o = float(son['Open']);  c = float(son['Close'])
-    h = float(son['High']);  l = float(son['Low'])
+    # Sinyal ve onay barları (1-2 bar formasyonlar)
+    o_on, h_on, l_on, c_on = _ohlc(df.iloc[-1])   # onay mumu
+    o,    h,    l,    c    = _ohlc(df.iloc[-2])    # sinyal mumu
+    o2,   h2,   l2,   c2   = _ohlc(df.iloc[-3])   # sinyal öncesi bar (2-bar bağlamı)
+
+    # 3-bar formasyonlar
+    o_i, h_i, l_i, c_i = _ohlc(df.iloc[-3])   # ilk bar (düşüş)
+    o_m, h_m, l_m, c_m = _ohlc(df.iloc[-2])   # orta bar (yıldız/geçiş)
+    o_s, h_s, l_s, c_s = _ohlc(df.iloc[-1])   # son bar (tamamlayıcı)
+
     toplam = h - l
     if toplam <= 0:
         return None
 
-    govde     = abs(c - o)
-    alt_golge = min(c, o) - l
+    govde     = abs(c  - o)
+    govde2    = abs(c2 - o2)
+    govde_on  = abs(c_on - o_on)
+    alt_golge = min(c, o)  - l
     ust_golge = h - max(c, o)
 
-    # Çekiç: alt gölge ≥ 2× gövde, ≥ %45 toplam aralık, kapanış üst %55'te
+    # ── ATR: son 7 barın ortalama aralığı ──────────────────────
+    atr = float((df['High'].iloc[-8:-1] - df['Low'].iloc[-8:-1]).mean())
+    if atr <= 0:
+        atr = c * 0.01
+    min_govde = atr * 0.12     # anlamsız toz mumları elemek için alt sınır
+
+    # ── Düşüş trendi bağlamı ────────────────────────────────────
+    # 6 bar önce fiyat, sinyal barından önceki barın kapanışından anlamlı yüksek
+    trend_yukari = float(df['Close'].iloc[-7])   # 6 bar önceki kapanış
+    trend_asagi  = c2                            # sinyal barı öncesi kapanış
+    dusus_trendi = trend_yukari > trend_asagi * 1.005   # en az %0.5 düşüş
+
+    # ── Hacim kontrolü ──────────────────────────────────────────
+    if 'Volume' in df.columns:
+        avg_vol  = float(df['Volume'].iloc[-8:-1].mean())
+        vol_sin  = float(df['Volume'].iloc[-2])
+        hacim_onay = avg_vol > 0 and vol_sin >= avg_vol * 0.75
+    else:
+        hacim_onay = True
+
+    # ── Onay mumu koşulları ─────────────────────────────────────
+    onay_yukselis = c_on > o_on                   # yükseliş mumu
+    onay_kapanisi = c_on > c                      # sinyal barının kapanışı üstünde
+    onay_anlamli  = govde_on >= min_govde         # anlamsız küçük mum değil
+
+    # ═══════════════════════════════════════════════════════════
+    # TEK MUM FORMASYONLARI  —  onay mumu zorunlu
+    # ═══════════════════════════════════════════════════════════
+
+    # Çekiç: uzun alt gölge, küçük gövde, düşüş dipinde dönüş
     cekic = (
-        govde > 0 and
-        alt_golge >= govde * 2.0 and
+        govde >= min_govde and
+        alt_golge >= govde  * 2.2 and
         alt_golge >= toplam * 0.45 and
-        ust_golge <= toplam * 0.35 and
-        c >= l + toplam * 0.55
+        ust_golge <= toplam * 0.30 and
+        c >= l + toplam * 0.55 and
+        dusus_trendi and
+        hacim_onay and
+        onay_yukselis and onay_kapanisi and onay_anlamli
     )
 
-    # Yutan mum: önceki düşüş mumunu tamamen yutuyor
-    po = float(prev['Open']); pc = float(prev['Close'])
-    yutan = (
-        pc < po and      # önceki düşüş
-        c  > o  and      # şu an yükseliş
-        o  <= pc and     # açılış önceki kapanış altında
-        c  >= po         # kapanış önceki açılış üstünde
+    # Dragonfly Doji: gövde yok, sadece uzun alt gölge — dipten fıyatı itti
+    dragonfly = (
+        govde    <= toplam * 0.05 and
+        alt_golge >= toplam * 0.72 and
+        ust_golge <= toplam * 0.10 and
+        toplam   >= atr * 0.6 and              # anlamsız küçük mum değil
+        dusus_trendi and
+        onay_yukselis and onay_kapanisi and onay_anlamli
     )
 
-    if not (cekic or yutan):
-        return None
+    # Doji: iki taraflı gölge, belirsizlik → güçlü onay mumu zorunlu
+    doji = (
+        toplam    >= atr * 0.5 and
+        govde     <= toplam * 0.07 and
+        alt_golge >= toplam * 0.32 and
+        ust_golge >= toplam * 0.32 and
+        c2 < o2 and dusus_trendi and
+        hacim_onay and
+        onay_yukselis and onay_kapanisi and onay_anlamli and
+        govde_on  >= atr * 0.35                # onay mumu gerçekten anlamlı olmalı
+    )
 
-    formasyon = "ÇEKIÇ" if cekic else "YUTAN MUM"
+    # Ters Çekiç: en zayıf — sadece üst gölgeyi aşan güçlü onay ile geçer
+    ters_cekic = (
+        govde     >= min_govde and
+        ust_golge >= govde  * 2.2 and
+        ust_golge >= toplam * 0.45 and
+        alt_golge <= toplam * 0.20 and
+        c2 < o2 and dusus_trendi and
+        hacim_onay and
+        c_on >= h and                          # onay mumu çekicin tepesini aşmalı
+        govde_on >= govde * 1.5               # güçlü onay mumu şart
+    )
 
-    destek_yakin = False
-    if destekler:
-        destek_yakin = any(abs(c - d) / (d + 1e-10) < 0.04 for d in destekler[:3])
+    # ═══════════════════════════════════════════════════════════
+    # İKİ MUM FORMASYONLARI  —  hafif onay koşulu
+    # ═══════════════════════════════════════════════════════════
+
+    # Bullish Engulfing: önceki düşüşü tamamen yutuyor
+    engulfing = (
+        c2 < o2 and govde2 >= min_govde and    # gerçek bir düşüş mumu
+        c  > o  and govde  >= min_govde and    # gerçek bir yükseliş mumu
+        o  <= c2 and                           # açılış önceki kapanış altında
+        c  >= o2 and                           # kapanış önceki açılış üstünde
+        govde >= govde2 * 1.1 and             # yutan mum belirgin şekilde büyük
+        dusus_trendi and
+        hacim_onay and
+        onay_yukselis                          # hafif onay yeterli
+    )
+
+    # Piercing: gap-down açılış, önceki mumun orta noktasını kurtarıyor
+    piercing = (
+        c2 < o2 and govde2 >= atr * 0.4 and   # anlamlı düşüş mumu
+        c  > o  and govde  >= min_govde and
+        o  < l2 and                            # kesin gap-down açılış
+        c  > (o2 + c2) / 2 and               # önceki mumun ortasını aştı
+        c  < o2 and                            # ama tam yutmadı (o engulfing olurdu)
+        dusus_trendi and hacim_onay and
+        onay_yukselis
+    )
+
+    # Harami: büyük düşüş mumunun içinde küçük yükseliş — zayıf, güçlü onay şart
+    harami = (
+        c2 < o2 and govde2 >= atr * 0.45 and  # büyük bir düşüş mumu
+        c  > o  and
+        o  > c2 and c  < o2 and              # gövde tamamen içeride
+        govde <= govde2 * 0.40 and           # belirgin şekilde küçük
+        dusus_trendi and
+        hacim_onay and
+        onay_yukselis and onay_kapanisi and onay_anlamli   # güçlü onay şart
+    )
+
+    # ═══════════════════════════════════════════════════════════
+    # ÜÇ MUM FORMASYONLARI  —  son bar tamamlayıcı, onay ayrıca gerekmez
+    # ═══════════════════════════════════════════════════════════
+
+    govde_i = abs(c_i - o_i)
+    govde_m = abs(c_m - o_m)
+    govde_s = abs(c_s - o_s)
+
+    # Sabah Yıldızı: büyük düşüş → küçük yıldız → büyük yükseliş
+    sabah_yildizi = (
+        c_i < o_i and govde_i >= atr * 0.50 and   # büyük düşüş mumu
+        govde_m <= govde_i * 0.35 and              # küçük yıldız
+        c_m < c_i and                              # yıldız önceki kapanışın altında
+        c_s > o_s and govde_s >= atr * 0.40 and   # anlamlı yükseliş mumu
+        c_s > (o_i + c_i) / 2 and                 # ilk mumun ortasını geçti
+        dusus_trendi
+    )
+
+    # 3 Beyaz Asker: art arda 3 güçlü yükseliş mumu, üst gölgeler küçük
+    uc_asker = (
+        c_s > o_s and c_m > o_m and c_i > o_i and
+        govde_s >= atr * 0.40 and govde_m >= atr * 0.35 and govde_i >= atr * 0.30 and
+        o_s >= c_m * 0.996 and o_m >= c_i * 0.996 and   # ardışık, büyük gap yok
+        c_s > c_m > c_i and                              # her kapanış öncekinin üstünde
+        (h_s - max(o_s, c_s)) <= govde_s * 0.40 and     # üst gölgeler küçük
+        (h_m - max(o_m, c_m)) <= govde_m * 0.40 and
+        (h_i - max(o_i, c_i)) <= govde_i * 0.40
+    )
+
+    # ── Öncelik sırası: en güçlüden en zayıfa ──────────────────
+    if   sabah_yildizi: formasyon = "SABAH YILDIZI"
+    elif uc_asker:      formasyon = "3 BEYAZ ASKER"
+    elif engulfing:     formasyon = "YUTAN MUM"
+    elif cekic:         formasyon = "ÇEKIÇ"
+    elif dragonfly:     formasyon = "DRAGONFLY DOJİ"
+    elif piercing:      formasyon = "PİERCİNG"
+    elif harami:        formasyon = "HARAMİ"
+    elif ters_cekic:    formasyon = "TERS ÇEKIÇ"
+    elif doji:          formasyon = "DOJİ"
+    else:               return None
+
+    # Referans fiyat: 3-bar formasyonlarda son barın kapanışı, diğerlerinde onay barı
+    ref = c_s if formasyon in ("SABAH YILDIZI", "3 BEYAZ ASKER") else c_on
+    destek_yakin = bool(destekler and
+                        any(abs(ref - d) / (d + 1e-10) < 0.05 for d in destekler[:3]))
+
+    guclu = destek_yakin or formasyon in ("SABAH YILDIZI", "3 BEYAZ ASKER", "YUTAN MUM")
 
     return {
         'formasyon':    formasyon,
         'destek_yakin': destek_yakin,
-        'guclu':        destek_yakin,
+        'guclu':        guclu,
     }
+
+
+# ────────────────────────────────────────────
+# Heikin Ashi
+# ────────────────────────────────────────────
+
+def heikin_ashi(df: "pd.DataFrame") -> "pd.DataFrame":
+    """Normal OHLCV DataFrame'i Heikin Ashi mumlarına dönüştürür."""
+    ha = df.copy()
+    ha['Close'] = (df['Open'] + df['High'] + df['Low'] + df['Close']) / 4
+    ha_open = [(df['Open'].iloc[0] + df['Close'].iloc[0]) / 2]
+    for i in range(1, len(df)):
+        ha_open.append((ha_open[-1] + ha['Close'].iloc[i - 1]) / 2)
+    ha['Open'] = ha_open
+    ha['High'] = pd.concat([ha['Open'], ha['Close'], df['High']], axis=1).max(axis=1)
+    ha['Low']  = pd.concat([ha['Open'], ha['Close'], df['Low']],  axis=1).min(axis=1)
+    return ha
 
 
 # ────────────────────────────────────────────
@@ -935,7 +1102,8 @@ def sinyal_hesapla(df, periyot_tipi="1d", destek_gun_sayisi=3, close_gunluk=None
     elif bol_sq_ok and macd_val > 0:
         r['genel_sinyal'] = "BOL. SIKIŞMA"
     elif mum_ok and mum.get('guclu'):
-        r['genel_sinyal'] = "ÇEKİÇ/YUTAN"
+        r['genel_sinyal']   = "YÜKSELİŞ FORMASYONU"
+        r['mum_formasyon']  = mum.get('formasyon', '')
     elif destek_ok:
         r['genel_sinyal'] = "DESTEK AL"
     elif macd_olum_ok:
