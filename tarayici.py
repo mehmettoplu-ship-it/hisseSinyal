@@ -871,7 +871,7 @@ def sinyal_hesapla(df, periyot_tipi="1d", destek_gun_sayisi=3, close_gunluk=None
     rsi_val  = float(rsi_seri.iloc[-1])
     r['rsi'] = round(rsi_val, 1)
     if   rsi_val < 30:         r['rsi_sinyal'] = "AL";   r['rsi_yorum'] = "Aşırı Satım"
-    elif rsi_val <= 55:        r['rsi_sinyal'] = "NÖTR"; r['rsi_yorum'] = f"{rsi_val:.0f}"
+    elif rsi_val <= 68:        r['rsi_sinyal'] = "NÖTR"; r['rsi_yorum'] = f"{rsi_val:.0f}"
     else:                      r['rsi_sinyal'] = "SAT";  r['rsi_yorum'] = "Aşırı Alım"
 
     # ── Trend (SMA50) ──────────────────────────
@@ -935,7 +935,9 @@ def sinyal_hesapla(df, periyot_tipi="1d", destek_gun_sayisi=3, close_gunluk=None
     r['macd_yaklasan']  = macd_yaklasan
     r['macd_yaklasan_bar'] = yaklasan_bar
 
-    if macd_kesisim:
+    if macd_olum and olum_kac_once == 0:
+        r['macd_sinyal'] = "SAT";  r['macd_yorum'] = "ÖLÜM KESİŞİMİ"
+    elif macd_kesisim:
         ne_zaman = "bu mumda" if kesisim_kac_once == 0 else f"{kesisim_kac_once} mum önce"
         r['macd_sinyal'] = "AL"
         r['macd_yorum']  = f"KESİŞİM ({ne_zaman})"
@@ -945,7 +947,7 @@ def sinyal_hesapla(df, periyot_tipi="1d", destek_gun_sayisi=3, close_gunluk=None
     elif hist_son > 0 and hist_son >= hist_prev:
         r['macd_sinyal'] = "AL";   r['macd_yorum'] = f"{macd_val:.3f}"
     elif hist_son < 0 and hist_son <= hist_prev:
-        r['macd_sinyal'] = "NÖTR"; r['macd_yorum'] = f"{macd_val:.3f}"
+        r['macd_sinyal'] = "SAT";  r['macd_yorum'] = f"Zayıflıyor {macd_val:.3f}"
     else:
         r['macd_sinyal'] = "NÖTR"; r['macd_yorum'] = f"{macd_val:.3f}"
 
@@ -1044,14 +1046,16 @@ def sinyal_hesapla(df, periyot_tipi="1d", destek_gun_sayisi=3, close_gunluk=None
     destek_kirildi = bool(destekler and r['fiyat'] < destekler[0] * 0.99)
     r['destek_kirildi'] = destek_kirildi
 
-    # ── Gösterge puanı (sadece SAT tespiti için) ──────────
-    agirliklar = {'rsi': 1.5, 'trend': 2.0, 'macd': 1.5,
+    # ── Gösterge puanı ──────────────────────────────────────
+    agirliklar = {'rsi': 1.5, 'trend': 2.0, 'macd': 2.0,
                   'bollinger': 1.0, 'stokastik': 1.0, 'momentum': 0.5}
     al_puan = sat_puan = 0.0
     for ind, agirlik in agirliklar.items():
         s = r.get(f'{ind}_sinyal', 'NÖTR')
         if s == "AL":  al_puan  += agirlik
         if s == "SAT": sat_puan += agirlik
+    if destek_kirildi:   sat_puan += 1.5   # destek kırılımı ek baskı
+    if r.get('macd_olum'): sat_puan += 0.5  # ölüm kesişimi bonus (macd_sinyal zaten saydı)
 
     r['al_puan']  = round(al_puan, 2)
     r['sat_puan'] = round(sat_puan, 2)
@@ -1111,9 +1115,9 @@ def sinyal_hesapla(df, periyot_tipi="1d", destek_gun_sayisi=3, close_gunluk=None
         r['genel_sinyal'] = "MACD ÖLÜ"
     elif destek_kirildi:
         r['genel_sinyal'] = "DESTEK KIRILDI"
-    elif sat_puan >= 5.5 and sat_puan >= al_puan * 2.0:
+    elif sat_puan >= 5.0 and sat_puan >= al_puan * 1.8:
         r['genel_sinyal'] = "GÜÇLÜ SAT"
-    elif sat_puan >= 4.0 and sat_puan > al_puan * 1.2:
+    elif sat_puan >= 3.5 and sat_puan > al_puan * 1.1:
         r['genel_sinyal'] = "SAT"
     else:
         r['genel_sinyal'] = "NÖTR"
