@@ -330,7 +330,7 @@ def rsi_diverjans_bul(close, rsi_seri=None, lookback=50, pencere=5):
 
     if c[d2] >= c[d1] * 0.999:    # fiyat daha düşük dip yapmıyor
         return None
-    if r[d2] <= r[d1] + 1.5:      # RSI en az 1.5 puan daha yüksek olmalı
+    if r[d2] <= r[d1] * 1.10:      # RSI en az %10 daha yüksek olmalı (yüzdesel tolerans)
         return None
     if r[d2] > 60:                 # RSI zaten yüksek → diverjans anlamsız
         return None
@@ -464,10 +464,11 @@ def mum_formasyonu_bul(df, destekler=None):
     ust_golge = h - max(c, o)
 
     # ── ATR: son 7 barın ortalama aralığı ──────────────────────
-    atr = float((df['High'].iloc[-8:-1] - df['Low'].iloc[-8:-1]).mean())
+    atr_seri = df['High'].iloc[-8:-1] - df['Low'].iloc[-8:-1]
+    atr = float(atr_seri.mean()) if len(atr_seri) >= 5 else 0.0
     if atr <= 0:
-        atr = c * 0.01
-    min_govde = atr * 0.12     # anlamsız toz mumları elemek için alt sınır
+        return None   # yeterli bar yoksa formasyon aramasını atla
+    min_govde = atr * 0.15     # anlamsız toz mumları elemek için alt sınır
 
     # ── Düşüş trendi bağlamı ────────────────────────────────────
     # 6 bar önce fiyat, sinyal barından önceki barın kapanışından anlamlı yüksek
@@ -663,13 +664,12 @@ def _sutunlari_duzenle(df):
 def veri_cek(hisse_kodu, periyot_tipi="1d"):
     """Yahoo Finance'den OHLCV verisi çeker. Hata varsa None döner."""
     ticker = f"{hisse_kodu}.IS"
+    _KW = dict(auto_adjust=True, progress=False, timeout=20)
     try:
         if periyot_tipi == "1h":
-            df = yf.download(ticker, period="30d", interval="1h",
-                             auto_adjust=True, progress=False)
+            df = yf.download(ticker, period="30d", interval="1h", **_KW)
         elif periyot_tipi == "4h":
-            df = yf.download(ticker, period="90d", interval="1h",
-                             auto_adjust=True, progress=False)
+            df = yf.download(ticker, period="90d", interval="1h", **_KW)
             if df is not None and not df.empty:
                 df = _sutunlari_duzenle(df)
                 df = df.resample('4h').agg({
@@ -679,14 +679,11 @@ def veri_cek(hisse_kodu, periyot_tipi="1d"):
                 }).dropna()
                 return df if len(df) >= 30 else None
         elif periyot_tipi == "1w":
-            df = yf.download(ticker, period="3y",  interval="1wk",
-                             auto_adjust=True, progress=False)
+            df = yf.download(ticker, period="3y",  interval="1wk", **_KW)
         elif periyot_tipi == "1mo":
-            df = yf.download(ticker, period="10y", interval="1mo",
-                             auto_adjust=True, progress=False)
+            df = yf.download(ticker, period="10y", interval="1mo", **_KW)
         else:  # "1d"
-            df = yf.download(ticker, period="2y",  interval="1d",
-                             auto_adjust=True, progress=False)
+            df = yf.download(ticker, period="2y",  interval="1d", **_KW)
 
         if df is None or df.empty:
             return None
@@ -707,7 +704,8 @@ def veri_cek_toplu(hisseler: list, periyot_tipi: str) -> dict:
     tickers = " ".join(f"{h}.IS" for h in hisseler)
     try:
         raw = yf.download(tickers, period=period, interval=interval,
-                          auto_adjust=True, progress=False, group_by='ticker')
+                          auto_adjust=True, progress=False, group_by='ticker',
+                          timeout=30)
     except Exception:
         return {}
 
@@ -766,8 +764,11 @@ def _hizala_gunluk_ema(df_g, close_gunluk, _emas=None):
     import numpy as np, pandas as pd
 
     def _to_days(idx):
-        # .asi8 → nanoseconds since epoch (tz-aware ve tz-naive her ikisinde de güvenli)
-        return pd.DatetimeIndex(idx).asi8 // (86_400 * 10**9)
+        # Timezone uyumsuzluğunu önlemek için UTC'ye normalize et, sonra gün sayısına çevir
+        dti = pd.DatetimeIndex(idx)
+        if dti.tz is not None:
+            dti = dti.tz_convert('UTC').tz_localize(None)
+        return dti.asi8 // (86_400 * 10**9)
 
     g_days = _to_days(df_g.index)
 
@@ -999,8 +1000,8 @@ def sinyal_hesapla(df, periyot_tipi="1d", destek_gun_sayisi=3, close_gunluk=None
     # Periyodun minimumunu bul ve fiyat oradan N gün üstünde mi?
     dip_30 = float(df['Low'].tail(30).min())
     dip_konum = int(df['Low'].tail(30).values.argmin())
-    # Dip son 20-5 gün arasında oluştuysa (çok eski veya çok yeni değil)
-    dip_eski   = 5 <= (30 - dip_konum) <= 25
+    # Dip son 18-3 gün arasında oluştuysa (çok eski veya çok yeni değil)
+    dip_eski   = 3 <= (30 - dip_konum) <= 18
     son_n_dip  = df['Close'].tail(destek_gun_sayisi)
     dip_uzeri  = bool((son_n_dip > dip_30 * 1.001).all())
     dip_yakin  = 0 < (r['fiyat'] - dip_30) / dip_30 < 0.10

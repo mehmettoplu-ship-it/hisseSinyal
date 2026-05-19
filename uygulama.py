@@ -672,8 +672,8 @@ class AlarmThread(QThread):
             except Exception:
                 pass
 
-            # 5 dakika bekle — 1'er saniyelik uykularla iptal edilebilir
-            for _ in range(300):
+            # 1 dakika bekle — 1'er saniyelik uykularla iptal edilebilir
+            for _ in range(60):
                 if self._dur:
                     break
                 time.sleep(1)
@@ -2113,7 +2113,7 @@ class DetayPanel(QWidget):
         self._detay_fetch = TekHisseFetchThread(hisse, kod)
         self._detay_fetch.bitti.connect(self.guncelle)
         self._detay_fetch.hata.connect(
-            lambda h: self.lbl_tarih.setText(f"{h} — veri alınamadı"))
+            lambda h, s: self.lbl_tarih.setText(f"{h} — {s}"))
         self._detay_fetch.start()
 
     def _alarm_toggle(self):
@@ -2554,7 +2554,7 @@ class TaramaThread(QThread):
 class TekHisseFetchThread(QThread):
     """Tek bir hisse için arka planda veri çeker (favoriler için)."""
     bitti = pyqtSignal(dict)
-    hata  = pyqtSignal(str)
+    hata  = pyqtSignal(str, str)   # (hisse, sebep)
 
     def __init__(self, hisse: str, periyot: str):
         super().__init__()
@@ -2563,9 +2563,15 @@ class TekHisseFetchThread(QThread):
 
     def run(self):
         gun_sayilari = {"1h": 3, "4h": 18, "1d": 3, "1w": 3, "1mo": 1}
-        df = veri_cek(self.hisse, self.periyot)
+        try:
+            df = veri_cek(self.hisse, self.periyot)
+        except Exception as e:
+            self.hata.emit(self.hisse, f"Veri indirilemedi: {e}")
+            return
         if df is None:
-            self.hata.emit(self.hisse)
+            self.hata.emit(self.hisse,
+                "Yahoo Finance'den veri alınamadı. "
+                "Hisse sembolü yanlış veya hisse işlem dışı olabilir.")
             return
         # Günlük olmayan periyotlarda EMAlar için günlük close çek
         close_gunluk = None
@@ -2573,13 +2579,18 @@ class TekHisseFetchThread(QThread):
             df_gun = veri_cek(self.hisse, "1d")
             if df_gun is not None and 'Close' in df_gun.columns:
                 close_gunluk = df_gun['Close']
-        sonuc = sinyal_hesapla(df, self.periyot, gun_sayilari.get(self.periyot, 3),
-                               close_gunluk=close_gunluk)
+        try:
+            sonuc = sinyal_hesapla(df, self.periyot, gun_sayilari.get(self.periyot, 3),
+                                   close_gunluk=close_gunluk)
+        except Exception as e:
+            self.hata.emit(self.hisse, f"Sinyal hesaplama hatası: {e}")
+            return
         if sonuc:
             sonuc['hisse'] = self.hisse
             self.bitti.emit(sonuc)
         else:
-            self.hata.emit(self.hisse)
+            self.hata.emit(self.hisse,
+                f"Bu periyotta ({self.periyot}) yeterli veri yok veya sinyal üretilemedi.")
 
 # ═══════════════════════════════════════════════════════════
 # Backtest Thread
@@ -2595,11 +2606,12 @@ class BacktestThread(QThread):
         '1d': ('2y',   '1d', False, 10,  '%d.%m.%Y'),
     }
 
-    def __init__(self, hisse: str, periyot: str = '1d'):
+    def __init__(self, hisse: str, periyot: str = '1d', hedef_pct: float = 5.0):
         super().__init__()
-        self.hisse   = hisse
-        self.periyot = periyot
-        self._dur    = False
+        self.hisse     = hisse
+        self.periyot   = periyot
+        self.hedef_pct = hedef_pct
+        self._dur      = False
 
     def dur(self):
         self._dur = True
@@ -2630,7 +2642,7 @@ class BacktestThread(QThread):
             self.bitti.emit([], {})
             return
 
-        HEDEF_PCT = 5.0
+        HEDEF_PCT = self.hedef_pct
         kayitlar  = []
 
         for i in range(50, n - bekleme):
@@ -3892,6 +3904,7 @@ class BacktestDialog(QDialog):
         root.setSpacing(10)
 
         self.lbl_baslik = QLabel("🧪  Strateji Backtest  —  Günlük  ·  Hedef: %5 kâr / 10 bar")
+        self.lbl_baslik.setObjectName("btBaslik")
         self.lbl_baslik.setStyleSheet(f"color:{C_TEXT}; font-size:14px; font-weight:700;")
         root.addWidget(self.lbl_baslik)
 
@@ -3905,6 +3918,7 @@ class BacktestDialog(QDialog):
 
         # Periyot seçici
         self._bt_periyot = '1d'
+        self._bt_per_ad  = 'Günlük'
         self._bt_per_btns = {}
         seg = QWidget()
         seg.setFixedHeight(36)
@@ -3926,6 +3940,20 @@ class BacktestDialog(QDialog):
             seg_l.addWidget(btn)
         self._bt_per_captions = {k: c for _, k, c in _PER_BT_CFG}
 
+        from PyQt6.QtWidgets import QDoubleSpinBox
+        lbl_hedef = QLabel("Hedef %:")
+        lbl_hedef.setStyleSheet(f"color:{C_MUTED}; font-size:12px;")
+        self.spn_hedef = QDoubleSpinBox()
+        self.spn_hedef.setRange(1.0, 30.0)
+        self.spn_hedef.setSingleStep(0.5)
+        self.spn_hedef.setValue(5.0)
+        self.spn_hedef.setSuffix(" %")
+        self.spn_hedef.setFixedSize(80, 36)
+        self.spn_hedef.setStyleSheet(
+            f"QDoubleSpinBox{{background:{C_CARD2};color:{C_TEXT};border:none;"
+            f"border-radius:8px;padding:4px 6px;font-size:12px;}}")
+        self.spn_hedef.valueChanged.connect(lambda _: self._baslik_guncelle())
+
         self.btn_bas = QPushButton("▶  Başlat")
         self.btn_bas.setFixedSize(100, 36)
         self.btn_bas.setStyleSheet(
@@ -3941,6 +3969,9 @@ class BacktestDialog(QDialog):
         gir.addWidget(self.txt_h)
         gir.addSpacing(8)
         gir.addWidget(seg)
+        gir.addSpacing(8)
+        gir.addWidget(lbl_hedef)
+        gir.addWidget(self.spn_hedef)
         gir.addSpacing(8)
         gir.addWidget(self.btn_bas)
         gir.addSpacing(10)
@@ -4013,9 +4044,16 @@ class BacktestDialog(QDialog):
         for k, btn in self._bt_per_btns.items():
             btn.setChecked(k == kod)
             btn.setStyleSheet(_seg_btn_stili(k == kod))
-        cap = self._bt_per_captions.get(kod, '')
         per_ad = {'1h': '1 Saatlik', '4h': '4 Saatlik', '1d': 'Günlük'}.get(kod, '')
-        self.lbl_baslik.setText(f"🧪  Strateji Backtest  —  {per_ad}  ·  {cap}")
+        self._bt_per_ad = per_ad
+        self._baslik_guncelle()
+
+    def _baslik_guncelle(self):
+        per_ad  = getattr(self, '_bt_per_ad', 'Günlük')
+        hedef   = self.spn_hedef.value() if hasattr(self, 'spn_hedef') else 5.0
+        bekleme = {'1h': 20, '4h': 10, '1d': 10}.get(self._bt_periyot, 10)
+        self.lbl_baslik.setText(
+            f"🧪  Strateji Backtest  —  {per_ad}  ·  Hedef: %{hedef:.1f} kâr / {bekleme} bar")
 
     def _baslat(self):
         hisse = self.txt_h.text().strip().upper()
@@ -4032,7 +4070,7 @@ class BacktestDialog(QDialog):
         self.prog.setValue(0)
         self.btn_bas.setText("■  Durdur")
 
-        self._bt_thread = BacktestThread(hisse, self._bt_periyot)
+        self._bt_thread = BacktestThread(hisse, self._bt_periyot, self.spn_hedef.value())
         self._bt_thread.ilerleme.connect(
             lambda m, t: self.prog.setValue(int(m / t * 100) if t else 0))
         self._bt_thread.bitti.connect(self._bitti)
@@ -4860,7 +4898,7 @@ class AnaPencere(QMainWindow):
             self._fav_fetch = TekHisseFetchThread(hisse, periyot)
             self._fav_fetch.bitti.connect(self.detay.guncelle)
             self._fav_fetch.bitti.connect(lambda _: self.lbl_durum.setText(""))
-            self._fav_fetch.hata.connect(lambda h: self.lbl_durum.setText(f"{h} veri alınamadı"))
+            self._fav_fetch.hata.connect(lambda h, s: self.lbl_durum.setText(f"{h} — {s}"))
             self._fav_fetch.start()
         else:
             self.detay.guncelle(sonuc)
@@ -5178,8 +5216,10 @@ class AnaPencere(QMainWindow):
         self._analiz_bulunan += 1
         self._analiz_bitti()
 
-    def _analiz_hata(self, hisse: str):
+    def _analiz_hata(self, hisse: str, sebep: str = ""):
         self._analiz_bitti()
+        if sebep:
+            self.statusBar().showMessage(f"{hisse} — {sebep}", 8000)
 
     def _analiz_bitti(self):
         self._analiz_bekleyen -= 1
