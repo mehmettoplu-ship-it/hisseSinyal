@@ -1925,6 +1925,17 @@ class DetayPanel(QWidget):
             f"padding:6px 10px; font-size:12px; border:1px solid #665500;")
         root.addWidget(self.lbl_not_goster)
 
+        # MTF özet satırı
+        self._mtf_bar = QWidget()
+        self._mtf_bar.setVisible(False)
+        self._mtf_bar.setFixedHeight(32)
+        self._mtf_bar.setStyleSheet(
+            f"background:#1c1c1e; border-radius:8px;")
+        self._mtf_bar_lay = QHBoxLayout(self._mtf_bar)
+        self._mtf_bar_lay.setContentsMargins(10, 4, 10, 4)
+        self._mtf_bar_lay.setSpacing(6)
+        root.addWidget(self._mtf_bar)
+
         self._sonuc = None
         self._kap_thread = None
         self.btn_fvt.setEnabled(False)
@@ -2273,6 +2284,82 @@ class DetayPanel(QWidget):
         if self._sonuc:
             NedenDialog(self._sonuc, self).exec()
 
+    def mtf_guncelle(self, sinyaller: dict):
+        """Çoklu periyot özet satırını günceller. sinyaller = {periyot: genel_sinyal}"""
+        # Önceki içeriği temizle
+        while self._mtf_bar_lay.count():
+            w = self._mtf_bar_lay.takeAt(0)
+            if w.widget():
+                w.widget().deleteLater()
+
+        if len(sinyaller) < 2:
+            self._mtf_bar.setVisible(False)
+            return
+
+        _PER_AD  = {"1h": "1S", "4h": "4S", "1d": "Gün", "1w": "Hafta", "1mo": "Ay"}
+        _PER_SIR = ["1mo", "1w", "1d", "4h", "1h"]
+        _AL_SET  = {s for s in SINYAL_RENK if s not in ("GÜÇLÜ SAT", "SAT", "MACD ÖLÜ", "DESTEK KIRILDI")}
+        _SAT_SET = {"SAT", "GÜÇLÜ SAT", "MACD ÖLÜ", "DESTEK KIRILDI"}
+
+        lbl_ba = QLabel("Periyotlar:")
+        lbl_ba.setStyleSheet(f"color:{C_MUTED}; font-size:10px; background:transparent;")
+        self._mtf_bar_lay.addWidget(lbl_ba)
+
+        al_periyotlar  = []
+        sat_periyotlar = []
+        for per in _PER_SIR:
+            if per not in sinyaller:
+                continue
+            sinyal = sinyaller[per]
+            per_ad = _PER_AD.get(per, per)
+            if sinyal in _AL_SET:
+                renk, bg = "#30d158", "#0a2e1a"
+                al_periyotlar.append(per_ad)
+            elif sinyal in _SAT_SET:
+                renk, bg = "#ff453a", "#2d0a0a"
+                sat_periyotlar.append(per_ad)
+            else:
+                renk, bg = C_MUTED, C_CARD2
+            pill = QLabel(f"{per_ad}: {sinyal}")
+            pill.setStyleSheet(
+                f"color:{renk}; background:{bg}; border-radius:5px; "
+                f"padding:1px 7px; font-size:10px; font-weight:600;")
+            pill.setToolTip(sinyal)
+            self._mtf_bar_lay.addWidget(pill)
+
+        self._mtf_bar_lay.addStretch()
+
+        # Genel durum badge
+        if al_periyotlar and sat_periyotlar:
+            # Büyük periyot baskın kuralı
+            _BUY_PERIYOTLAR = ["Ay", "Hafta", "Gün"]
+            buyuk_al  = any(p in al_periyotlar  for p in _BUY_PERIYOTLAR)
+            buyuk_sat = any(p in sat_periyotlar for p in _BUY_PERIYOTLAR)
+            if buyuk_al and not buyuk_sat:
+                aciklama = "Ana trend AL — kısa vadeli düzeltme, bekle veya düzeltmede al"
+                durum_txt, durum_renk, durum_bg = "⬆ Ana Trend AL", "#30d158", "#0a2e1a"
+            elif buyuk_sat and not buyuk_al:
+                aciklama = "Ana trend SAT — kısa vadeli toparlanma, satış fırsatı"
+                durum_txt, durum_renk, durum_bg = "⬇ Ana Trend SAT", "#ff453a", "#2d0a0a"
+            else:
+                aciklama = "Periyotlar çelişiyor — daha net sinyal için bekle"
+                durum_txt, durum_renk, durum_bg = "⚡ KARMA", "#f97316", "#3d1f00"
+        elif len(al_periyotlar) >= 2:
+            aciklama = f"Tüm periyotlar AL yönünde: {', '.join(al_periyotlar)}"
+            durum_txt, durum_renk, durum_bg = "✅ UYUMLU AL", "#30d158", "#0a2e1a"
+        else:
+            aciklama = f"Tüm periyotlar SAT yönünde: {', '.join(sat_periyotlar)}"
+            durum_txt, durum_renk, durum_bg = "✅ UYUMLU SAT", "#ff453a", "#2d0a0a"
+
+        lbl_durum = QLabel(durum_txt)
+        lbl_durum.setStyleSheet(
+            f"color:{durum_renk}; background:{durum_bg}; border-radius:6px; "
+            f"padding:2px 8px; font-size:10px; font-weight:700;")
+        lbl_durum.setToolTip(aciklama)
+        self._mtf_bar_lay.addWidget(lbl_durum)
+
+        self._mtf_bar.setVisible(True)
+
     def _kap_ac(self):
         if not self._sonuc:
             return
@@ -2525,6 +2612,7 @@ class DetayPanel(QWidget):
             lbl.setText(lbl.text().split(':')[0] + ': —')
             lbl.setStyleSheet(_muted)
         self._sonuc = None
+        self._mtf_bar.setVisible(False)
 
 # ═══════════════════════════════════════════════════════════
 # Tarama İş Parçacığı
@@ -2548,7 +2636,25 @@ class TaramaThread(QThread):
         al_n = sat_n = 0
         toplam = len(self.hisseler) * len(self.periyotlar)
         say = 0
-        _mtf_sayac: dict = {}   # hisse → al sinyal periyot sayısı
+        _mtf_sayac:    dict = {}   # hisse → al sinyal periyot sayısı
+        _mtf_sinyaller: dict = {}  # hisse → {periyot: genel_sinyal}
+
+        _AL_SET  = {s for s in SINYAL_RENK if s not in ("GÜÇLÜ SAT", "SAT", "MACD ÖLÜ", "DESTEK KIRILDI")}
+        _SAT_SET = {"SAT", "GÜÇLÜ SAT", "MACD ÖLÜ", "DESTEK KIRILDI"}
+        _PER_AD  = {"1h": "1S", "4h": "4S", "1d": "Gün", "1w": "Hafta", "1mo": "Ay"}
+
+        def _mtf_durum_hesapla(sinyaller: dict):
+            if len(sinyaller) < 2:
+                return None, ""
+            al_p  = [_PER_AD.get(p, p) for p, s in sinyaller.items() if s in _AL_SET]
+            sat_p = [_PER_AD.get(p, p) for p, s in sinyaller.items() if s in _SAT_SET]
+            if al_p and sat_p:
+                return "KARMA", f"AL: {', '.join(al_p)}  ·  SAT: {', '.join(sat_p)}"
+            if len(al_p) >= 2:
+                return "UYUMLU_AL", f"AL uyumu: {', '.join(al_p)}"
+            if len(sat_p) >= 2:
+                return "UYUMLU_SAT", f"SAT uyumu: {', '.join(sat_p)}"
+            return None, ""
 
         for periyot in self.periyotlar:
             if self._dur:
@@ -2575,7 +2681,12 @@ class TaramaThread(QThread):
                             GECMIS.kaydet(hisse, genel_s, sonuc['fiyat'], periyot)
                         else:
                             sat_n += 1
-                        sonuc['mtf_sayi'] = _mtf_sayac.get(hisse, 0)
+                        _mtf_sinyaller.setdefault(hisse, {})[periyot] = genel_s
+                        mtf_durum, mtf_aciklama = _mtf_durum_hesapla(_mtf_sinyaller[hisse])
+                        sonuc['mtf_sayi']      = _mtf_sayac.get(hisse, 0)
+                        sonuc['mtf_durum']     = mtf_durum
+                        sonuc['mtf_aciklama']  = mtf_aciklama
+                        sonuc['mtf_sinyaller'] = dict(_mtf_sinyaller[hisse])
                         self.sinyal_buldu.emit(sonuc)
 
         self.bitti.emit(al_n, sat_n)
@@ -2791,6 +2902,28 @@ class KapFetchThread(QThread):
         self.hata.emit(self.hisse)
 
 
+def _mtf_badge_guncelle(lbl: QLabel, durum: str, aciklama: str):
+    """MTF uyum badge'ini günceller. AnaPencere ve liste satırı paylaşır."""
+    if durum == "KARMA":
+        lbl.setText("⚡ KARMA")
+        lbl.setStyleSheet("background:#3d1f00;color:#f97316;border-radius:4px;"
+                          "padding:1px 6px;font-size:10px;font-weight:700;")
+    elif durum == "UYUMLU_AL":
+        lbl.setText("✅ UYUMLU")
+        lbl.setStyleSheet("background:#0a2e1a;color:#30d158;border-radius:4px;"
+                          "padding:1px 6px;font-size:10px;font-weight:700;")
+    elif durum == "UYUMLU_SAT":
+        lbl.setText("✅ UYUMLU")
+        lbl.setStyleSheet("background:#2d0a0a;color:#ff453a;border-radius:4px;"
+                          "padding:1px 6px;font-size:10px;font-weight:700;")
+    else:
+        lbl.setText("")
+        lbl.setVisible(False)
+        return
+    lbl.setVisible(True)
+    lbl.setToolTip(aciklama)
+
+
 # ═══════════════════════════════════════════════════════════
 # Sinyal Liste Satırı
 # ═══════════════════════════════════════════════════════════
@@ -2895,15 +3028,16 @@ def _liste_satiri_olustur(sonuc: dict, pin_cb=None) -> QListWidgetItem:
     layout.addWidget(btn_pin)
     layout.addSpacing(4)
 
-    # MTF badge
-    mtf_sayi = sonuc.get('mtf_sayi', 0)
-    if mtf_sayi >= 2:
-        lbl_mtf = QLabel(f"🔀{mtf_sayi}×")
-        lbl_mtf.setStyleSheet(
-            f"background:#3a1800; color:#f97316; border-radius:4px; "
-            f"padding:1px 5px; font-size:10px; font-weight:700;")
-        layout.addWidget(lbl_mtf)
-        layout.addSpacing(2)
+    # MTF badge — objectName ile sonradan güncellenebilir
+    lbl_mtf = QLabel("")
+    lbl_mtf.setObjectName("mtfBadge")
+    lbl_mtf.setVisible(False)
+    mtf_durum    = sonuc.get('mtf_durum')
+    mtf_aciklama = sonuc.get('mtf_aciklama', '')
+    if mtf_durum:
+        _mtf_badge_guncelle(lbl_mtf, mtf_durum, mtf_aciklama)
+    layout.addWidget(lbl_mtf)
+    layout.addSpacing(2)
 
     # Not varsa küçük nokta
     if NOTLAR.var_mi(hisse):
@@ -4564,6 +4698,8 @@ class AnaPencere(QMainWindow):
         self._ema_fetch = None
         self._sonuclar  = []
         self._pin_count = 0
+        self._mtf_hisse: dict = {}   # hisse → {periyot: genel_sinyal}
+        self._mtf_items: dict = {}   # hisse → [(QListWidgetItem, QWidget), ...]
         self._oto_timer = QTimer()
         self._oto_timer.timeout.connect(self._oto_tara)
         self._kur_ui()
@@ -4913,6 +5049,8 @@ class AnaPencere(QMainWindow):
             return
         self.liste.clear()
         self._sonuclar.clear()
+        self._mtf_hisse.clear()
+        self._mtf_items.clear()
         self._al_n = self._sat_n = 0
         self._pin_count = 0
         self.lbl_sayac.setText("AL: 0   SAT: 0")
@@ -4981,6 +5119,24 @@ class AnaPencere(QMainWindow):
         self.liste.setItemWidget(item, widget)
         self._sonuclar.append(sonuc)
 
+        # MTF tracking — önceki periyot sinyali varsa tüm itemlerin badge'ini güncelle
+        periyot = sonuc.get('periyot', '')
+        self._mtf_hisse.setdefault(hisse, {})[periyot] = sonuc.get('genel_sinyal', '')
+        self._mtf_items.setdefault(hisse, []).append((item, widget))
+        if len(self._mtf_hisse[hisse]) >= 2:
+            mtf_durum    = sonuc.get('mtf_durum')
+            mtf_aciklama = sonuc.get('mtf_aciklama', '')
+            for _item, _widget in self._mtf_items[hisse]:
+                lbl = _widget.findChild(QLabel, "mtfBadge")
+                if lbl:
+                    self._mtf_badge_guncelle(lbl, mtf_durum, mtf_aciklama)
+                    # Sinyal dict güncelle ki detay paneli doğru görüntülesin
+                    _s = _item.data(Qt.ItemDataRole.UserRole)
+                    if _s:
+                        _s['mtf_durum']     = mtf_durum
+                        _s['mtf_aciklama']  = mtf_aciklama
+                        _s['mtf_sinyaller'] = dict(self._mtf_hisse[hisse])
+
     def _bitti(self, al_n, sat_n):
         self.btn_tara.setEnabled(True)
         self.btn_dur.setEnabled(False)
@@ -4992,6 +5148,10 @@ class AnaPencere(QMainWindow):
             f"Tarama tamamlandı — AL: {al_n}  SAT: {sat_n}")
         if al_n + sat_n == 0:
             self.detay.temizle()
+
+    @staticmethod
+    def _mtf_badge_guncelle(lbl: QLabel, durum: str, aciklama: str):
+        _mtf_badge_guncelle(lbl, durum, aciklama)
 
     def _secildi(self, item):
         if item is None:
@@ -5011,6 +5171,8 @@ class AnaPencere(QMainWindow):
             self._fav_fetch.start()
         else:
             self.detay.guncelle(sonuc)
+            hisse_s = sonuc.get('hisse', '')
+            self.detay.mtf_guncelle(self._mtf_hisse.get(hisse_s, {}))
             # Taramadan gelen non-daily sonuç → arka planda günlük EMA çek
             if sonuc.get('periyot', '1d') != '1d' and sonuc.get('hisse'):
                 DetayPanel._thread_kapat(self._ema_fetch)
