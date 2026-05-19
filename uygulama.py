@@ -408,6 +408,24 @@ class PortfoyYoneticisi:
             self._aktif[hisse]["hedef_pct"] = hedef_pct
             self._kaydet()
 
+    def trailing_stop_ayarla(self, hisse: str, trailing_pct: float):
+        if hisse in self._aktif:
+            self._aktif[hisse]["trailing_pct"] = trailing_pct
+            # en_yuksek ilk kez ayarlanıyorsa giriş fiyatından başlat
+            if "en_yuksek" not in self._aktif[hisse]:
+                self._aktif[hisse]["en_yuksek"] = self._aktif[hisse].get("giris", 0)
+            self._kaydet()
+
+    def en_yuksek_guncelle(self, hisse: str, fiyat: float) -> bool:
+        """Fiyat yeni zirve kırdıysa en_yuksek'i güncelle, True döner."""
+        if hisse in self._aktif:
+            onceki = self._aktif[hisse].get("en_yuksek", 0)
+            if fiyat > onceki:
+                self._aktif[hisse]["en_yuksek"] = round(fiyat, 4)
+                self._kaydet()
+                return True
+        return False
+
 
 PORTFOY = PortfoyYoneticisi()
 
@@ -649,22 +667,34 @@ class AlarmThread(QThread):
                 if guncel is not None and guncel >= hedef:
                     self.tetiklendi.emit(hisse, hedef, guncel)
 
-            # Portföy stop/hedef alarmları
+            # Portföy stop/hedef/trailing alarmları
             try:
                 aktif = PORTFOY.aktif_listesi()
                 for hisse, pos in aktif.items():
                     if self._dur:
                         break
-                    stop_pct  = pos.get("stop_pct", 0)
-                    hedef_pct = pos.get("hedef_pct", 0)
-                    if not stop_pct and not hedef_pct:
-                        continue
-                    giris = pos.get("giris", 0)
+                    stop_pct     = pos.get("stop_pct", 0)
+                    hedef_pct    = pos.get("hedef_pct", 0)
+                    trailing_pct = pos.get("trailing_pct", 0)
+                    giris        = pos.get("giris", 0)
                     if not giris:
+                        continue
+                    if not stop_pct and not hedef_pct and not trailing_pct:
                         continue
                     guncel = self._fiyat_cek(hisse)
                     if guncel is None:
                         continue
+
+                    # İz süren stop: en yüksek fiyatı güncelle, sonra kontrol et
+                    if trailing_pct:
+                        PORTFOY.en_yuksek_guncelle(hisse, guncel)
+                        en_yuksek     = PORTFOY.pozisyon(hisse).get("en_yuksek", giris)
+                        trailing_stop = en_yuksek * (1 - trailing_pct / 100)
+                        if guncel <= trailing_stop:
+                            self.tetiklendi.emit(
+                                f"TRAILING:{hisse}", round(trailing_stop, 2), guncel)
+                            continue   # trailing tetiklendi, sabit stop'u da kontrol etme
+
                     if stop_pct and guncel <= giris * (1 - stop_pct / 100):
                         self.tetiklendi.emit(f"STOP:{hisse}", giris * (1 - stop_pct / 100), guncel)
                     elif hedef_pct and guncel >= giris * (1 + hedef_pct / 100):
@@ -3704,16 +3734,17 @@ class PortfoyDialog(QDialog):
         t1l = QVBoxLayout(t1)
         t1l.setContentsMargins(0, 8, 0, 0)
         self.tbl_aktif = QTableWidget()
-        self.tbl_aktif.setColumnCount(9)
+        self.tbl_aktif.setColumnCount(10)
         self.tbl_aktif.setHorizontalHeaderLabels(
-            ["Hisse", "Giriş ₺", "Güncel ₺", "K/Z %", "Lot", "Stop %", "Hedef %", "Tarih", ""])
+            ["Hisse", "Giriş ₺", "Güncel ₺", "K/Z %", "Lot",
+             "Stop %", "Hedef %", "Trailing %", "Tarih", ""])
         self.tbl_aktif.setStyleSheet(_TBL_QSS)
         h1 = self.tbl_aktif.horizontalHeader()
-        for c in range(8):
+        for c in range(9):
             h1.setSectionResizeMode(c, QHeaderView.ResizeMode.ResizeToContents
-                                    if c != 7 else QHeaderView.ResizeMode.Stretch)
-        h1.setSectionResizeMode(8, QHeaderView.ResizeMode.Fixed)
-        self.tbl_aktif.setColumnWidth(8, 80)
+                                    if c != 8 else QHeaderView.ResizeMode.Stretch)
+        h1.setSectionResizeMode(9, QHeaderView.ResizeMode.Fixed)
+        self.tbl_aktif.setColumnWidth(9, 80)
         self.tbl_aktif.verticalHeader().setVisible(False)
         self.tbl_aktif.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.tbl_aktif.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -3762,17 +3793,28 @@ class PortfoyDialog(QDialog):
             guncel = self._gun_fiyatlar.get(hisse, giris)
             kz     = (guncel - giris) / giris * 100
             kz_r   = C_GREEN if kz >= 0 else C_RED
-            stop_pct  = p.get('stop_pct', 0.0)
-            hedef_pct = p.get('hedef_pct', 0.0)
+            stop_pct     = p.get('stop_pct', 0.0)
+            hedef_pct    = p.get('hedef_pct', 0.0)
+            trailing_pct = p.get('trailing_pct', 0.0)
+            en_yuksek    = p.get('en_yuksek', giris)
+            # Trailing stop seviyesini hesapla
+            if trailing_pct:
+                t_stop_tl = en_yuksek * (1 - trailing_pct / 100)
+                trailing_txt = f"%{trailing_pct:.1f}  ₺{t_stop_tl:.2f}"
+                trailing_renk = "#f59e0b"
+            else:
+                trailing_txt  = "—"
+                trailing_renk = C_MUTED
             vals   = [
                 (hisse,                        C_TEXT,  True),
                 (f"₺{giris:,.2f}",             C_MUTED, False),
                 (f"₺{guncel:,.2f}",            C_TEXT,  False),
                 (f"{'+' if kz>=0 else ''}{kz:.2f}%", kz_r, True),
                 (str(p['lot']),                C_MUTED, False),
-                (f"%{stop_pct:.1f}" if stop_pct else "—",  C_RED,   False),
-                (f"%{hedef_pct:.1f}" if hedef_pct else "—", C_GREEN, False),
-                (p['tarih'],                   C_MUTED, False),
+                (f"%{stop_pct:.1f}" if stop_pct else "—",  C_RED,          False),
+                (f"%{hedef_pct:.1f}" if hedef_pct else "—", C_GREEN,        False),
+                (trailing_txt,                              trailing_renk,  False),
+                (p['tarih'],                                C_MUTED,        False),
             ]
             for col, (txt, renk, bold) in enumerate(vals):
                 it = QTableWidgetItem(txt)
@@ -3782,28 +3824,26 @@ class PortfoyDialog(QDialog):
                 self.tbl_aktif.setItem(row, col, it)
             self.tbl_aktif.setRowHeight(row, 36)
 
-            # Stop/Hedef ayar butonu
-            btn_sh = QPushButton("Stop/Hedef")
+            # Buton container (sütun 9)
+            btn_sh = QPushButton("Ayarlar")
             btn_sh.setStyleSheet(
                 f"QPushButton{{background:{C_CARD2};color:{C_MUTED};border:none;"
                 f"border-radius:6px;font-size:10px;margin:4px;}}"
                 f"QPushButton:hover{{background:#2a3a5c;color:{C_TEXT};}}")
             btn_sh.clicked.connect(lambda _, h=hisse: self._stop_hedef_ayarla(h))
-            # Kapatma butonu widget olarak koy (eski 6 → yeni 8)
             btn_kapat = QPushButton("Kapat")
             btn_kapat.setStyleSheet(
                 f"QPushButton{{background:{C_RED_DIM};color:{C_RED};border:none;"
                 f"border-radius:6px;font-size:11px;font-weight:600;margin:4px;}}"
                 f"QPushButton:hover{{background:{C_RED};color:#fff;}}")
             btn_kapat.clicked.connect(lambda _, h=hisse: self._kapat_dialog(h))
-            # Birden fazla widget için container
             cont = QWidget()
             cont_lay = QHBoxLayout(cont)
             cont_lay.setContentsMargins(2, 2, 2, 2)
             cont_lay.setSpacing(2)
             cont_lay.addWidget(btn_sh)
             cont_lay.addWidget(btn_kapat)
-            self.tbl_aktif.setCellWidget(row, 8, cont)
+            self.tbl_aktif.setCellWidget(row, 9, cont)
 
         self.lbl_ozet.setText(f"{len(aktif)} açık pozisyon")
 
@@ -3832,20 +3872,89 @@ class PortfoyDialog(QDialog):
         p = PORTFOY.pozisyon(hisse)
         if not p:
             return
-        mevcut_stop  = p.get('stop_pct', 5.0)
-        mevcut_hedef = p.get('hedef_pct', 10.0)
-        stop_pct, ok = QInputDialog.getDouble(
-            self, f"{hisse} — Stop Seviyesi",
-            "Stop yüzdesi (giriş fiyatından aşağı %):",
-            value=mevcut_stop, min=0.1, max=50.0, decimals=1)
-        if not ok:
-            return
-        hedef_pct, ok = QInputDialog.getDouble(
-            self, f"{hisse} — Hedef Seviyesi",
-            "Hedef yüzdesi (giriş fiyatından yukarı %):",
-            value=mevcut_hedef, min=0.1, max=200.0, decimals=1)
-        if ok:
-            PORTFOY.stop_hedef_ayarla(hisse, stop_pct, hedef_pct)
+
+        # Tek diyalogda tüm ayarlar
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"{hisse} — Alarm Ayarları")
+        dlg.setFixedWidth(360)
+        dlg.setStyleSheet(f"background:{C_BG}; color:{C_TEXT};")
+        lay = QVBoxLayout(dlg)
+        lay.setSpacing(12)
+        lay.setContentsMargins(20, 20, 20, 20)
+
+        _lbl_stili = f"color:{C_MUTED}; font-size:12px;"
+        _spn_stili = (f"QDoubleSpinBox{{background:{C_CARD2};color:{C_TEXT};border:none;"
+                      f"border-radius:8px;padding:4px 8px;font-size:13px;}}")
+
+        from PyQt6.QtWidgets import QDoubleSpinBox, QFormLayout
+        form = QFormLayout()
+        form.setSpacing(10)
+
+        spn_stop = QDoubleSpinBox()
+        spn_stop.setRange(0, 50); spn_stop.setSingleStep(0.5)
+        spn_stop.setSuffix(" %"); spn_stop.setDecimals(1)
+        spn_stop.setValue(p.get('stop_pct', 5.0))
+        spn_stop.setStyleSheet(_spn_stili)
+        spn_stop.setFixedHeight(36)
+        lbl_stop = QLabel("Sabit Stop (giriş'ten %)")
+        lbl_stop.setStyleSheet(_lbl_stili)
+        form.addRow(lbl_stop, spn_stop)
+
+        spn_hedef = QDoubleSpinBox()
+        spn_hedef.setRange(0, 200); spn_hedef.setSingleStep(1.0)
+        spn_hedef.setSuffix(" %"); spn_hedef.setDecimals(1)
+        spn_hedef.setValue(p.get('hedef_pct', 10.0))
+        spn_hedef.setStyleSheet(_spn_stili)
+        spn_hedef.setFixedHeight(36)
+        lbl_hedef = QLabel("Hedef (giriş'ten %)")
+        lbl_hedef.setStyleSheet(_lbl_stili)
+        form.addRow(lbl_hedef, spn_hedef)
+
+        # Ayırıcı
+        sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f"color:{C_BORDER};")
+
+        spn_trailing = QDoubleSpinBox()
+        spn_trailing.setRange(0, 30); spn_trailing.setSingleStep(0.5)
+        spn_trailing.setSuffix(" %"); spn_trailing.setDecimals(1)
+        spn_trailing.setSpecialValueText("Kapalı")   # 0 ise "Kapalı" göster
+        spn_trailing.setValue(p.get('trailing_pct', 0.0))
+        spn_trailing.setStyleSheet(_spn_stili)
+        spn_trailing.setFixedHeight(36)
+        lbl_trailing = QLabel("İz Süren Stop %")
+        lbl_trailing.setStyleSheet(f"color:#f59e0b; font-size:12px; font-weight:600;")
+        form.addRow(lbl_trailing, spn_trailing)
+
+        # Tepe fiyatı bilgi etiketi
+        en_y = p.get('en_yuksek', p['giris'])
+        lbl_tepe = QLabel(f"Şimdiye kadar görülen tepe: ₺{en_y:.2f}")
+        lbl_tepe.setStyleSheet(f"color:{C_MUTED}; font-size:11px; padding-left:4px;")
+
+        btn_kaydet = QPushButton("Kaydet")
+        btn_kaydet.setFixedHeight(38)
+        btn_kaydet.setStyleSheet(
+            f"QPushButton{{background:{C_GREEN};color:#fff;border:none;"
+            f"border-radius:10px;font-size:13px;font-weight:600;}}"
+            f"QPushButton:hover{{background:#34e35e;}}")
+        btn_kaydet.clicked.connect(dlg.accept)
+
+        lay.addLayout(form)
+        lay.addWidget(sep)
+        lay.addWidget(lbl_tepe)
+        lay.addWidget(btn_kaydet)
+
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            PORTFOY.stop_hedef_ayarla(hisse, spn_stop.value(), spn_hedef.value())
+            t_pct = spn_trailing.value()
+            if t_pct > 0:
+                PORTFOY.trailing_stop_ayarla(hisse, t_pct)
+            else:
+                # trailing kapatıldıysa temizle
+                pos = PORTFOY.pozisyon(hisse)
+                if pos and "trailing_pct" in pos:
+                    pos.pop("trailing_pct", None)
+                    pos.pop("en_yuksek", None)
+                    PORTFOY._kaydet()
             self._listele()
 
     def _kapat_dialog(self, hisse):
@@ -5103,8 +5212,25 @@ class AnaPencere(QMainWindow):
             winsound.Beep(1400, 180)
         except Exception:
             pass
-        # Portföy stop/hedef alarmları STOP:HİSSE veya HEDEF:HİSSE formatında gelir
-        if hisse_raw.startswith("STOP:"):
+        # Portföy alarmları formatı: STOP: / HEDEF: / TRAILING: prefix
+        if hisse_raw.startswith("TRAILING:"):
+            hisse = hisse_raw[9:]
+            pos   = PORTFOY.pozisyon(hisse)
+            en_y  = pos.get("en_yuksek", 0) if pos else 0
+            t_pct = pos.get("trailing_pct", 0) if pos else 0
+            baslik = f"📉 İz Süren Stop: {hisse}"
+            mesaj  = (f"Tepe: ₺{en_y:.2f}  ·  Stop: ₺{hedef:.2f} kırıldı  ·  Güncel: ₺{guncel:.2f}\n"
+                      f"(%{t_pct:.1f} iz süren stop tetiklendi)")
+            telegram_mesaj = (
+                f"📉 <b>İZ SÜREN STOP: {hisse}</b>\n"
+                f"Tepe ₺{en_y:.2f} → Stop ₺{hedef:.2f} kırıldı\n"
+                f"Güncel: ₺{guncel:.2f}  ·  Trailing %{t_pct:.1f}")
+            try:
+                winsound.Beep(800, 200)
+                winsound.Beep(600, 300)
+            except Exception:
+                pass
+        elif hisse_raw.startswith("STOP:"):
             hisse = hisse_raw[5:]
             baslik = f"STOP Uyarısı: {hisse}"
             mesaj  = f"Stop ₺{hedef:.2f} kırıldı — güncel ₺{guncel:.2f}"
